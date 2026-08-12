@@ -1,0 +1,50 @@
+{
+  "name": "@corpuskit/web",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "type": "module",
+  "description": "CorpusKit production web application",
+  "engines": {
+    "node": ">=24.18.1 <25"
+  },
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0",
+    "start": "next start",
+    "test": "vitest run --coverage",
+    "test:auth": "vitest run --config vitest.auth.config.ts --coverage",
+    "test:workbenches": "vitest run --config vitest.workbenches.config.ts --coverage",
+    "test:watch": "vitest",
+    "pretest:e2e": "next build && node scripts/prepare-standalone.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test --config playwright.live.config.ts",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "openid-client": "6.8.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "redis": "6.2.1"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@eslint/eslintrc": "^3.3.1",
+    "@playwright/test": "^1.55.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.0.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.10"
+  }
+}

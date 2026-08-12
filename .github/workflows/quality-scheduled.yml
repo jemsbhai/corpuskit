@@ -1,0 +1,350 @@
+name: Scheduled quality evidence
+
+on:
+  schedule:
+    - cron: "27 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read # Verify that the candidate SHA completed the mandatory CI workflow.
+  contents: read
+
+concurrency:
+  group: scheduled-quality-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TRIVY_VERSION: "v0.73.0"
+  UV_VERSION: "0.12.3"
+
+jobs:
+  exact-sha-ci:
+    name: Require successful broad CI for this exact SHA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful exact-SHA CI run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          workflow_runs="$(gh api \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
+          jq -e --arg sha "${SOURCE_SHA}" '
+            [.workflow_runs[]
+              | select(.head_sha == $sha)
+              | select(.conclusion == "success")]
+            | length > 0
+          ' <<<"${workflow_runs}" >/dev/null
+
+  nightly-backend-linguistics:
+    name: Daily backend and linguistic release profile
+    needs: exact-sha-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked optimization profile and eSpeak NG
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends espeak-ng
+          uv lock --check
+          uv sync --frozen --all-groups --extra optimization --extra repository --extra llm
+
+      - name: Provision and verify checksum-pinned PHOIBLE
+        run: |
+          uv run corpuskit-phoible provision --json
+          uv run corpuskit-phoible status --json | \
+            jq --exit-status \
+              '.state == "ready" and .ready == true and .actual_bytes == .expected_bytes'
+
+      - name: Run broad backend suite with independent line and branch evidence
+        run: |
+          mkdir -p artifacts/nightly-backend
+          uv run pytest -m "not gpu and not provider" \
+            --junitxml=artifacts/nightly-backend/junit.xml \
+            --cov-report=json:artifacts/nightly-backend/coverage.json
+          uv run python -m scripts.quality.coverage_contract \
+            artifacts/nightly-backend/coverage.json \
+            --minimum-line 90 \
+            --minimum-branch 85 \
+            --output artifacts/nightly-backend/coverage-thresholds.json \
+            --enforce
+
+      - name: Require the real Linux linguistic acceptance set without skips
+        env:
+          CORPUSKIT_RUN_HUGGINGFACE_ACCEPTANCE: "1"
+          HF_HUB_DOWNLOAD_TIMEOUT: "30"
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          HF_HUB_ETAG_TIMEOUT: "10"
+        run: |
+          uv run pytest -o addopts='' --no-cov -q \
+            --junitxml=artifacts/nightly-backend/linguistic-junit.xml \
+            tests/integration/test_corpusgen_adapter_smoke.py \
+            tests/integration/test_cli_parity_acceptance.py \
+            tests/integration/test_huggingface_repository_acceptance.py \
+            tests/integration/test_multilingual_demo_acceptance.py \
+            tests/integration/test_phoible_exploration_smoke.py \
+            tests/integration/test_selector_algorithms_acceptance.py
+          uv run python -m scripts.quality.junit_contract \
+            artifacts/nightly-backend/linguistic-junit.xml \
+            --output artifacts/nightly-backend/linguistic-acceptance.json \
+            --enforce
+
+      - name: Upload daily backend evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-backend-${{ github.sha }}
+          path: artifacts/nightly-backend
+          if-no-files-found: error
+          retention-days: 14
+
+  nightly-frontend:
+    name: Daily frontend and three-browser release profile
+    needs: exact-sha-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+          package-manager-cache: false
+
+      - name: Pin npm toolchain
+        run:
+          | # zizmor: ignore[adhoc-packages] Exact npm bootstrap precedes locked npm ci.
+          npm install --global npm@11.16.0 --ignore-scripts
+          test "$(npm --version)" = "11.16.0"
+
+      - name: Install reviewed dependencies
+        run: |
+          npm ci
+          test "$(npm approve-scripts --allow-scripts-pending)" = \
+            "No packages with unreviewed install scripts."
+
+      - name: Run frontend static, coverage, and production-build gates
+        run: |
+          npm run format:check
+          npm run lint -- --max-warnings=0
+          npm run typecheck
+          npm test -- --coverage.reportsDirectory=coverage/default
+          npm run test:auth --workspace @corpuskit/web -- \
+            --coverage.reportsDirectory=coverage/auth
+          npm run test:workbenches --workspace @corpuskit/web -- \
+            --coverage.reportsDirectory=coverage/workbenches
+          npm run build
+
+      - name: Install all release browser engines
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run three-browser and automated-accessibility acceptance
+        run: npm run test:e2e
+
+      - name: Upload daily frontend and browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-frontend-${{ github.sha }}
+          path: |
+            apps/web/coverage
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+  performance:
+    name: Deterministic performance and memory
+    needs: exact-sha-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked test runtime and eSpeak NG
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends espeak-ng
+          uv lock --check
+          uv sync --frozen --all-groups
+
+      - name: Provision checksum-verified PHOIBLE
+        run: uv run corpuskit-phoible provision --json
+
+      - name: Enforce approved-baseline lifecycle
+        run: |
+          mkdir -p artifacts/performance
+          uv run python -m scripts.performance.baseline_policy \
+            --baseline benchmarks/baselines/github-actions-ubuntu-24.04-x64.v1.json \
+            --expected-profile github-actions-ubuntu-24.04-x64 \
+            --mode scheduled \
+            --output artifacts/performance/baseline-policy.json \
+            --enforce
+
+      - name: Run repeated benchmark and isolated worker-memory fixture
+        run: |
+          mkdir -p artifacts/performance
+          uv run python -m scripts.performance.run_benchmarks \
+            --output artifacts/performance/observed.json \
+            --profile-id github-actions-ubuntu-24.04-x64 \
+            --samples 20 \
+            --warmups 3
+
+      - name: Enforce absolute SLO and memory contract
+        run: |
+          uv run python -m scripts.performance.benchmark_contract \
+            artifacts/performance/observed.json \
+            artifacts/performance/observed.json \
+            --output artifacts/performance/absolute-comparison.json \
+            --enforce
+
+      - name: Compare only an exact approved profile when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="benchmarks/baselines/github-actions-ubuntu-24.04-x64.v1.json"
+          if [[ -f "${baseline}" ]]; then
+            uv run python -m scripts.performance.benchmark_contract \
+              "${baseline}" artifacts/performance/observed.json \
+              --output artifacts/performance/baseline-comparison.json \
+              --maximum-regression 0.10 \
+              --enforce
+          else
+            echo "No approved exact-profile baseline is present; absolute gates remain enforced."
+          fi
+
+      - name: Upload performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-evidence-${{ github.sha }}
+          path: artifacts/performance
+          if-no-files-found: error
+          retention-days: 14
+
+  mutation:
+    name: Scoped mutation thresholds
+    needs: exact-sha-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan source secrets and infrastructure configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          version: ${{ env.TRIVY_VERSION }}
+          scanners: secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: false
+
+      - name: Build exact mutation runner
+        run: |
+          docker build --provenance=false --sbom=false \
+            --file docker/mutation.Dockerfile \
+            --tag corpuskit-mutation:3.7.0 .
+
+      - name: Prove image and mounted-checkout runtime identities are non-root
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Config.User}}' corpuskit-mutation:3.7.0)" = "10001:10001"
+          test "$(id -u)" -ne 0
+          docker run --rm --network none \
+            --user "$(id -u):$(id -g)" \
+            --entrypoint sh corpuskit-mutation:3.7.0 \
+            -ceu 'test "$(id -u)" -ne 0'
+
+      - name: Scan mutation runner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corpuskit-mutation:3.7.0
+          version: ${{ env.TRIVY_VERSION }}
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: false
+
+      - name: Run bounded Linux mutation wave
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 45m \
+            docker run --rm --network none \
+              --user "$(id -u):$(id -g)" \
+              --mount "type=bind,source=${PWD},target=/workspace" \
+              corpuskit-mutation:3.7.0 run
+
+      - name: Enforce conservative overall and critical scores
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/mutation
+          docker run --rm --network none \
+            --user "$(id -u):$(id -g)" \
+            --mount "type=bind,source=${PWD},target=/workspace" \
+            --entrypoint python \
+            corpuskit-mutation:3.7.0 \
+            -m scripts.mutation.check_score \
+            --mutants-root mutants \
+            --output artifacts/mutation/evidence.json \
+            --enforce
+
+      - name: Upload mutation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-evidence-${{ github.sha }}
+          path: artifacts/mutation
+          if-no-files-found: error
+          retention-days: 14

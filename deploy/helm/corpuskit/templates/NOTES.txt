@@ -1,0 +1,8 @@
+CorpusKit rendered a production-only topology for {{ .Values.ingress.host }}.
+
+Before sending traffic, verify all pre-created Secret/PVC references, migration and PHOIBLE hook
+logs, API readiness, Temporal pollers for all four queues, dependency telemetry, alert delivery,
+and rollback evidence. The chart does not install PostgreSQL, Temporal, Redis/Valkey, S3, OIDC,
+Prometheus, an ingress controller, or GPU drivers.
+
+Runbook: {{ .Values.monitoring.runbookBaseUrl }}

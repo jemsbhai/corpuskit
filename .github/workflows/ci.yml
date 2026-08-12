@@ -1,0 +1,1136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  TRIVY_VERSION: "v0.73.0"
+  UV_VERSION: "0.12.3"
+
+jobs:
+  repository-shape:
+    name: Detect implemented workspaces
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      web-present: ${{ steps.detect.outputs.web-present }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Scan source secrets, dependencies, and infrastructure configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          version: ${{ env.TRIVY_VERSION }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Detect frontend workspace
+        id: detect
+        shell: bash
+        run: |
+          if [[ -f package-lock.json && -f apps/web/package.json ]]; then
+            echo "web-present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "web-present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  backend:
+    name: Backend quality and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install eSpeak NG
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends espeak-ng
+
+      - name: Verify lock and install
+        run: |
+          uv lock --check
+          uv sync --frozen --all-groups --extra optimization --extra llm
+
+      - name: Provision and verify pinned PHOIBLE snapshot
+        run: |
+          uv run corpuskit-phoible provision --json
+          uv run corpuskit-phoible status --json | \
+            jq --exit-status \
+              '.state == "ready" and .ready == true and .actual_bytes == .expected_bytes'
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Verify the committed OpenAPI contract
+        run: uv run python -m scripts.quality.openapi_contract check contracts/openapi.json
+
+      - name: Reject backward-incompatible OpenAPI changes on pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p reports
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          git show "origin/${BASE_REF}:contracts/openapi.json" > reports/openapi-base.json
+          uv run python -m scripts.quality.openapi_contract compare \
+            reports/openapi-base.json contracts/openapi.json
+
+      - name: Test
+        run: |
+          mkdir -p reports
+          uv run pytest \
+            --junitxml=reports/backend-junit.xml \
+            --cov-report=xml:coverage.xml \
+            --cov-report=json:coverage.json
+
+      - name: Enforce changed Python coverage on pull requests
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          uv run diff-cover coverage.xml \
+            --compare-branch "origin/${BASE_REF}" \
+            --fail-under=95
+
+      - name: Preserve backend test and coverage evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backend-quality-${{ github.sha }}
+          path: |
+            reports/backend-junit.xml
+            coverage.xml
+            coverage.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Audit Python dependencies
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes \
+            --format requirements-txt --output-file /tmp/runtime-requirements.txt
+          uv run pip-audit --requirement /tmp/runtime-requirements.txt
+
+  migrations:
+    name: PostgreSQL migrations and schema drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+        env:
+          POSTGRES_DB: corpuskit_migrations
+          POSTGRES_USER: corpuskit
+          POSTGRES_PASSWORD: migration-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U corpuskit -d corpuskit_migrations"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:migration-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_OWNER_URL: postgresql+asyncpg://corpuskit:migration-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_APP_URL: postgresql+asyncpg://corpuskit_app_test:app-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_DISPATCHER_URL: postgresql+asyncpg://corpuskit_dispatcher_test:dispatcher-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_WORKER_URL: postgresql+asyncpg://corpuskit_worker_test:worker-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_ADOPTION_URL: postgresql+asyncpg://corpuskit_adoption_test:adoption-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_MAINTENANCE_URL: postgresql+asyncpg://corpuskit_maintenance_test:maintenance-ci-only@127.0.0.1:5432/corpuskit_migrations
+      CORPUSKIT_TEST_POSTGRES_PLATFORM_URL: postgresql+asyncpg://corpuskit_platform_test:platform-ci-only@127.0.0.1:5432/corpuskit_migrations
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked environment
+        run: uv sync --frozen --all-groups
+
+      - name: Install matching PostgreSQL 17 client tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates curl gnupg
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          pgdg_key="$(mktemp)"
+          trap 'rm -f "${pgdg_key}"' EXIT
+          curl --fail --silent --show-error --location \
+            --output "${pgdg_key}" \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+          verify_pgdg_key() {
+            local key_file="$1"
+            local expected_fingerprint="$2"
+            local -a primary_fingerprints=()
+            mapfile -t primary_fingerprints < <(
+              gpg --batch --quiet --with-colons --show-keys "${key_file}" |
+                awk -F: '
+                  $1 == "pub" { primary = 1; next }
+                  primary && $1 == "fpr" { print $10; primary = 0 }
+                '
+            )
+            [[ "${#primary_fingerprints[@]}" -eq 1 ]] &&
+              [[ "${primary_fingerprints[0]}" == "${expected_fingerprint}" ]]
+          }
+
+          # Negative control: the validator must reject a near-match before the real
+          # PostgreSQL-published full primary-key fingerprint is accepted.
+          if verify_pgdg_key \
+            "${pgdg_key}" B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF0; then
+            echo "PGDG fingerprint validator accepted an incorrect key identity." >&2
+            exit 1
+          fi
+          verify_pgdg_key \
+            "${pgdg_key}" B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+          sudo install -m 0644 "${pgdg_key}" \
+            /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | \
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client-17
+          test "$(pg_dump --version | awk '{print $3}' | cut -d. -f1)" = "17"
+
+      - name: Provision non-login policy roles and isolated login principals
+        env:
+          PGPASSWORD: migration-ci-only
+        run: |
+          psql --host 127.0.0.1 --username corpuskit --dbname corpuskit_migrations \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE corpuskit_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_dispatcher NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_worker NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_adoption NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_maintenance NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_platform NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_app_test LOGIN PASSWORD 'app-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_dispatcher_test LOGIN PASSWORD 'dispatcher-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_worker_test LOGIN PASSWORD 'worker-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_adoption_test LOGIN PASSWORD 'adoption-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_maintenance_test LOGIN PASSWORD 'maintenance-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_platform_test LOGIN PASSWORD 'platform-ci-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          GRANT corpuskit_api TO corpuskit_app_test;
+          GRANT corpuskit_dispatcher TO corpuskit_dispatcher_test;
+          GRANT corpuskit_worker TO corpuskit_worker_test;
+          GRANT corpuskit_adoption TO corpuskit_adoption_test;
+          GRANT corpuskit_maintenance TO corpuskit_maintenance_test;
+          GRANT corpuskit_platform TO corpuskit_platform_test;
+          GRANT CONNECT ON DATABASE corpuskit_migrations TO
+            corpuskit_app_test, corpuskit_dispatcher_test, corpuskit_worker_test,
+            corpuskit_adoption_test, corpuskit_maintenance_test, corpuskit_platform_test;
+          SQL
+
+      - name: Upgrade empty PostgreSQL database
+        run: |
+          uv run corpuskit-db upgrade
+          uv run corpuskit-db current
+
+      - name: Exercise empty baseline rollback and reapply
+        run: |
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+          uv run corpuskit-db check
+
+      - name: Grant least-privilege table access to runtime roles
+        env:
+          PGPASSWORD: migration-ci-only
+        run: |
+          psql --host 127.0.0.1 --username corpuskit --dbname corpuskit_migrations \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO
+            corpuskit_api, corpuskit_dispatcher, corpuskit_worker,
+            corpuskit_adoption, corpuskit_maintenance, corpuskit_platform;
+          GRANT SELECT ON
+            organizations, users, memberships, projects, corpora, corpus_versions,
+            sentences, runs, run_events, outbox_messages, artifacts, quota_policies,
+            quota_usages, quota_reservations, audit_heads, audit_events,
+            run_execution_facts, run_replays
+            TO corpuskit_api;
+          GRANT INSERT ON
+            projects, corpora, corpus_versions, sentences, runs, run_events,
+            outbox_messages, artifacts, quota_reservations, audit_events, run_replays
+            TO corpuskit_api;
+          GRANT UPDATE ON
+            runs, artifacts, quota_usages, quota_reservations, audit_heads
+            TO corpuskit_api;
+          GRANT SELECT, UPDATE ON outbox_messages TO corpuskit_dispatcher;
+          GRANT SELECT ON
+            projects, corpus_versions, runs, run_events, artifacts, quota_policies,
+            quota_usages, quota_reservations, audit_heads, audit_events,
+            run_execution_facts, run_replays
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT INSERT ON run_events, artifacts, audit_events
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT INSERT ON run_execution_facts TO corpuskit_worker;
+          GRANT UPDATE ON
+            runs, artifacts, quota_usages, quota_reservations, audit_heads
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT UPDATE ON run_execution_facts, run_replays TO corpuskit_adoption;
+          GRANT SELECT ON
+            runs, artifacts, quota_policies, quota_usages, quota_reservations,
+            audit_heads, audit_events, run_execution_facts, run_replays
+            TO corpuskit_maintenance;
+          GRANT INSERT ON run_events, audit_events TO corpuskit_maintenance;
+          GRANT UPDATE ON
+            runs, artifacts, quota_usages, quota_reservations, audit_heads
+            TO corpuskit_maintenance;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON maintenance_cursors
+            TO corpuskit_maintenance;
+          GRANT SELECT ON ALL TABLES IN SCHEMA public TO corpuskit_platform;
+          GRANT INSERT, UPDATE ON
+            organizations, users, memberships, quota_policies, quota_usages, audit_heads
+            TO corpuskit_platform;
+          GRANT INSERT ON audit_events TO corpuskit_platform;
+          SQL
+
+      - name: Detect model and migration drift
+        run: uv run corpuskit-db check
+
+      - name: Exercise PostgreSQL job idempotency and outbox contracts
+        env:
+          CORPUSKIT_TEST_POSTGRES_URL: postgresql+asyncpg://corpuskit:migration-ci-only@127.0.0.1:5432/corpuskit_migrations
+        run: uv run pytest tests/integration/test_jobs.py -q --no-cov
+
+      - name: Exercise forced RLS, isolated service roles, quotas, and audit immutability
+        run: >-
+          uv run pytest
+          tests/integration/test_postgres_rate_limits.py
+          tests/integration/test_postgres_reproducibility.py
+          tests/integration/test_postgres_tenant_controls.py
+          tests/integration/test_postgres_maintenance_state.py
+          -q --no-cov
+
+      - name: Prove populated artifact rollback refusal is atomic
+        run: >-
+          uv run pytest
+          tests/integration/test_migrations.py::test_postgres_populated_artifact_downgrade_refusal_is_command_atomic
+          -q --no-cov
+
+      - name: Prove backup, offline verification, and isolated restore
+        env:
+          CORPUSKIT_RUN_POSTGRES_CONTINUITY_ACCEPTANCE: "1"
+        run: >-
+          uv run pytest
+          tests/integration/test_postgres_continuity_acceptance.py
+          -q --no-cov
+
+  durable-runtime:
+    name: Durable Temporal and combined replay execution
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+        env:
+          POSTGRES_DB: corpuskit_combined
+          POSTGRES_USER: corpuskit_owner
+          POSTGRES_PASSWORD: combined-owner-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U corpuskit_owner -d corpuskit_combined"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      CORPUSKIT_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+      CORPUSKIT_TEST_POSTGRES_OWNER_URL: postgresql+asyncpg://corpuskit_owner:combined-owner-only@127.0.0.1:5432/corpuskit_combined
+      CORPUSKIT_TEST_POSTGRES_APP_URL: postgresql+asyncpg://corpuskit_app_combined:combined-app-only@127.0.0.1:5432/corpuskit_combined
+      CORPUSKIT_TEST_POSTGRES_DISPATCHER_URL: postgresql+asyncpg://corpuskit_dispatcher_combined:combined-dispatcher-only@127.0.0.1:5432/corpuskit_combined
+      CORPUSKIT_TEST_POSTGRES_WORKER_URL: postgresql+asyncpg://corpuskit_worker_combined:combined-worker-only@127.0.0.1:5432/corpuskit_combined
+      CORPUSKIT_TEST_POSTGRES_ADOPTION_URL: postgresql+asyncpg://corpuskit_adoption_combined:combined-adoption-only@127.0.0.1:5432/corpuskit_combined
+      CORPUSKIT_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      CORPUSKIT_TEST_S3_BUCKET: corpuskit-combined-artifacts
+      CORPUSKIT_TEST_S3_ACCESS_KEY: corpuskit-combined
+      CORPUSKIT_TEST_S3_SECRET_KEY: combined-minio-only
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install native engine and locked environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends espeak-ng
+          uv sync --frozen --all-groups
+          uv run corpuskit-phoible provision --json
+
+      - name: Build the exact batch worker under test
+        run: >-
+          docker build
+          --file docker/worker.Dockerfile
+          --target worker-batch
+          --tag corpuskit-worker-batch:combined-ci
+          .
+
+      - name: Start pinned local Temporal and private MinIO servers
+        run: |
+          docker run --detach --rm --name corpuskit-temporal-ci \
+            --publish 127.0.0.1:7233:7233 \
+            temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e \
+            server start-dev --ip 0.0.0.0
+          docker run --detach --rm --name corpuskit-minio-combined-ci \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER=corpuskit-combined \
+            --env MINIO_ROOT_PASSWORD=combined-minio-only \
+            --tmpfs /data:rw,noexec,nodev,nosuid,size=256m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data --address :9000
+          for _attempt in $(seq 1 30); do
+            if docker exec corpuskit-temporal-ci temporal operator cluster health \
+              --address 127.0.0.1:7233 >/dev/null 2>&1 && \
+              curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs corpuskit-temporal-ci
+          docker logs corpuskit-minio-combined-ci
+          exit 1
+
+      - name: Exercise real Temporal dispatch, execution, privacy, and cancellation
+        run: |
+          uv run pytest tests/integration/test_temporal_runtime.py \
+            tests/integration/test_process_runner.py -q --no-cov
+
+      - name: Enforce durable workflow branch coverage
+        run: |
+          uv run pytest -o addopts='' \
+            tests/unit/test_temporal_contracts.py \
+            tests/unit/test_temporal_workflow.py \
+            tests/integration/test_temporal_activities.py \
+            tests/integration/test_temporal_handlers.py \
+            tests/integration/test_process_runner.py \
+            tests/integration/test_temporal_runtime.py \
+            tests/unit/test_entrypoints.py \
+            --cov=corpuskit.workflows --cov-branch --cov-report=term-missing \
+            --cov-fail-under=90 -q
+
+      - name: Provision combined-stack schema, identities, and private bucket
+        env:
+          CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit_owner:combined-owner-only@127.0.0.1:5432/corpuskit_combined
+        run: |
+          uv run corpuskit-db upgrade
+          uv run corpuskit-db check
+          docker run --rm --interactive --network host \
+            --env PGPASSWORD=combined-owner-only \
+            --entrypoint psql \
+            postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641 \
+            --host 127.0.0.1 --username corpuskit_owner --dbname corpuskit_combined \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE corpuskit_app_combined LOGIN PASSWORD 'combined-app-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_dispatcher_combined LOGIN PASSWORD 'combined-dispatcher-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_worker_combined LOGIN PASSWORD 'combined-worker-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          CREATE ROLE corpuskit_adoption_combined LOGIN PASSWORD 'combined-adoption-only' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS;
+          GRANT corpuskit_api TO corpuskit_app_combined;
+          GRANT corpuskit_dispatcher TO corpuskit_dispatcher_combined;
+          GRANT corpuskit_worker TO corpuskit_worker_combined;
+          GRANT corpuskit_adoption TO corpuskit_adoption_combined;
+          GRANT CONNECT ON DATABASE corpuskit_combined TO
+            corpuskit_app_combined, corpuskit_dispatcher_combined,
+            corpuskit_worker_combined, corpuskit_adoption_combined;
+          GRANT USAGE ON SCHEMA public TO
+            corpuskit_api, corpuskit_dispatcher, corpuskit_worker, corpuskit_adoption;
+          GRANT SELECT ON
+            organizations, users, memberships, projects, corpora, corpus_versions,
+            sentences, runs, run_events, outbox_messages, artifacts, quota_policies,
+            quota_usages, quota_reservations, audit_heads, audit_events,
+            run_execution_facts, run_replays
+            TO corpuskit_api;
+          GRANT INSERT ON
+            projects, corpora, corpus_versions, sentences, runs, run_events,
+            outbox_messages, artifacts, quota_reservations, audit_events, run_replays
+            TO corpuskit_api;
+          GRANT UPDATE ON
+            runs, artifacts, quota_usages, quota_reservations, audit_heads
+            TO corpuskit_api;
+          GRANT SELECT, UPDATE ON outbox_messages TO corpuskit_dispatcher;
+          GRANT SELECT ON
+            projects, corpus_versions, runs, run_events, artifacts, quota_policies,
+            quota_usages, quota_reservations, audit_heads, audit_events,
+            run_execution_facts, run_replays
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT INSERT ON run_events, artifacts, audit_events
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT INSERT ON run_execution_facts TO corpuskit_worker;
+          GRANT UPDATE ON
+            runs, artifacts, quota_usages, quota_reservations, audit_heads
+            TO corpuskit_worker, corpuskit_adoption;
+          GRANT UPDATE ON run_execution_facts, run_replays TO corpuskit_adoption;
+          DO $corpuskit$
+          BEGIN
+            IF EXISTS (
+              SELECT 1 FROM pg_roles
+              WHERE rolname IN (
+                'corpuskit_app_combined', 'corpuskit_dispatcher_combined',
+                'corpuskit_worker_combined', 'corpuskit_adoption_combined'
+              ) AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+            ) THEN
+              RAISE EXCEPTION 'combined acceptance login has unsafe attributes';
+            END IF;
+          END
+          $corpuskit$;
+          SQL
+          uv run python - <<'PY'
+          import boto3
+          from botocore.config import Config
+
+          client = boto3.client(
+              "s3",
+              endpoint_url="http://127.0.0.1:9000",
+              aws_access_key_id="corpuskit-combined",
+              aws_secret_access_key="combined-minio-only",
+              region_name="us-east-1",
+              config=Config(s3={"addressing_style": "path"}),
+          )
+          client.create_bucket(Bucket="corpuskit-combined-artifacts")
+          status = client.get_bucket_policy_status(Bucket="corpuskit-combined-artifacts")
+          assert status["PolicyStatus"]["IsPublic"] is False
+          PY
+
+      - name: Start image-attested non-root combined-stack worker
+        run: |
+          worker_image_digest="$(docker image inspect \
+            corpuskit-worker-batch:combined-ci --format '{{.Id}}')"
+          [[ "${worker_image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "CORPUSKIT_TEST_WORKER_IMAGE_DIGEST=${worker_image_digest}" >> "$GITHUB_ENV"
+          docker run --detach --rm --name corpuskit-worker-combined-ci \
+            --network host \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --tmpfs /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --env TMPDIR=/run/corpuskit-espeak \
+            --env XDG_CONFIG_HOME=/tmp/corpuskit-xdg \
+            --env CORPUSKIT_ENVIRONMENT=test \
+            --env CORPUSKIT_RUNTIME_ROLE=worker \
+            --env CORPUSKIT_AUTH_MODE=demo \
+            --env CORPUSKIT_DATABASE_URL=postgresql+asyncpg://corpuskit_worker_combined:combined-worker-only@127.0.0.1:5432/corpuskit_combined \
+            --env CORPUSKIT_ADOPTION_DATABASE_URL=postgresql+asyncpg://corpuskit_adoption_combined:combined-adoption-only@127.0.0.1:5432/corpuskit_combined \
+            --env CORPUSKIT_JOB_BACKEND=temporal \
+            --env CORPUSKIT_TEMPORAL_ADDRESS=127.0.0.1:7233 \
+            --env CORPUSKIT_TEMPORAL_NAMESPACE=default \
+            --env CORPUSKIT_TEMPORAL_TASK_QUEUE=batch-cpu \
+            --env CORPUSKIT_WORKER_PROFILE=batch-cpu \
+            --env "CORPUSKIT_WORKER_IMAGE_DIGEST=${worker_image_digest}" \
+            --env CORPUSKIT_TEMPORAL_ACTIVITY_HEARTBEAT_SECONDS=0.5 \
+            --env CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS=300 \
+            --env CORPUSKIT_ARTIFACT_BACKEND=s3 \
+            --env CORPUSKIT_ARTIFACT_S3_ENDPOINT=http://127.0.0.1:9000 \
+            --env CORPUSKIT_ARTIFACT_S3_BUCKET=corpuskit-combined-artifacts \
+            --env CORPUSKIT_ARTIFACT_S3_REGION=us-east-1 \
+            --env CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID=corpuskit-combined \
+            --env CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY=combined-minio-only \
+            --env CORPUSKIT_ARTIFACT_S3_PATH_STYLE=true \
+            corpuskit-worker-batch:combined-ci
+          test "$(docker inspect corpuskit-worker-combined-ci --format '{{.Config.User}}')" = \
+            "10001:10001"
+          test "$(docker inspect corpuskit-worker-combined-ci --format '{{.Image}}')" = \
+            "${worker_image_digest}"
+          for _attempt in $(seq 1 30); do
+            if docker exec corpuskit-temporal-ci temporal task-queue describe \
+              --address 127.0.0.1:7233 --task-queue batch-cpu --output json | \
+              jq --exit-status \
+                '[.pollers[] | select(.identity == "corpuskit-batch-cpu")] | length == 2' \
+                >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs corpuskit-worker-combined-ci
+          exit 1
+
+      - name: Exercise combined manifest, replay, MinIO, and redelivery acceptance
+        run: >-
+          uv run pytest
+          tests/integration/test_s3_minio.py
+          tests/integration/test_combined_reproducibility_runtime.py
+          -q --no-cov
+
+      - name: Show safe combined-runtime diagnostics
+        if: ${{ failure() }}
+        run: |
+          docker logs --tail 200 corpuskit-worker-combined-ci 2>&1 || true
+          docker logs --tail 100 corpuskit-temporal-ci 2>&1 || true
+          docker logs --tail 100 corpuskit-minio-combined-ci 2>&1 || true
+
+      - name: Stop local acceptance services
+        if: ${{ always() }}
+        run: |
+          docker stop corpuskit-worker-combined-ci >/dev/null 2>&1 || true
+          docker stop corpuskit-temporal-ci >/dev/null 2>&1 || true
+          docker stop corpuskit-minio-combined-ci >/dev/null 2>&1 || true
+
+  advanced-worker-contracts:
+    name: Profile-scoped advanced worker contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install native engine and locked test environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends espeak-ng
+          uv sync --frozen --all-groups
+
+      - name: Type-check worker composition and optional adapter boundaries
+        run: |
+          uv run mypy \
+            src/corpuskit/worker \
+            src/corpuskit/workflows \
+            src/corpuskit/adapters/corpusgen/model_runtime.py \
+            src/corpuskit/adapters/corpusgen/datg.py \
+            src/corpuskit/adapters/corpusgen/phon_rl.py
+
+      - name: Exercise profile routing, canonical adoption, deadlines, and process isolation
+        run: |
+          uv run pytest -o addopts='' \
+            tests/unit/test_worker_composition.py \
+            tests/unit/test_temporal_contracts.py \
+            tests/unit/test_entrypoints.py \
+            tests/unit/test_datg_worker_handler.py \
+            tests/unit/test_model_runtime_handlers.py \
+            tests/unit/test_phon_rl_worker_registry.py \
+            tests/integration/test_staged_artifact_adoption.py \
+            tests/integration/test_temporal_activities.py \
+            tests/integration/test_process_runner.py \
+            --cov=corpuskit.worker.composition \
+            --cov=corpuskit.worker.routing \
+            --cov=corpuskit.workflows.activities \
+            --cov=corpuskit.workflows.deadlines \
+            --cov=corpuskit.services.artifact_adoption \
+            --cov=corpuskit.worker.datg_handler \
+            --cov=corpuskit.worker.model_registry \
+            --cov=corpuskit.worker.phon_rl_registry \
+            --cov-branch --cov-report=term-missing --cov-fail-under=90 -q
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Validate deployment model and worker Dockerfile targets
+        run: |
+          docker compose config --quiet
+          docker buildx build --check --file docker/worker.Dockerfile --target worker-batch .
+          docker buildx build --check --file docker/worker.Dockerfile --target worker-external-provider .
+          docker buildx build --check --file docker/worker.Dockerfile --target worker-gpu-inference .
+          docker buildx build --check --file docker/worker.Dockerfile --target worker-gpu-training .
+
+      - name: Audit exact worker dependency profiles
+        run: |
+          for profile in worker-batch worker-external-provider worker-gpu-inference worker-gpu-training; do
+            uv export --frozen --extra "$profile" --no-dev --no-emit-project --no-hashes \
+              --format requirements-txt --output-file "/tmp/$profile-requirements.txt"
+            uv run pip-audit --requirement "/tmp/$profile-requirements.txt"
+          done
+
+  local-model-runtime:
+    name: Offline local model runtime
+    # PyPI's macOS Torch wheel is CPU-only. This avoids downloading an unused
+    # multi-gigabyte CUDA stack merely to prove the LOCAL_CPU contract.
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install native engine and locked local-model profile
+        run: |
+          brew install espeak-ng
+          uv sync --frozen --all-groups --extra local
+
+      - name: Type-check optional local-model boundaries
+        run: |
+          uv run mypy \
+            src/corpuskit/adapters/corpusgen/model_runtime.py \
+            src/corpuskit/adapters/corpusgen/datg.py \
+            src/corpuskit/adapters/corpusgen/phon_rl.py
+
+      - name: Exercise real offline safetensors generation, analysis, and DATG preview
+        run: |
+          uv run python -c "import tokenizers, torch, transformers"
+          mkdir -p reports/local-model
+          uv run pytest \
+            tests/integration/test_real_tiny_model_runtime.py \
+            tests/integration/test_datg_publication.py::test_real_offline_transformers_index_publish_inspect_and_logit_preview \
+            --junitxml=reports/local-model/junit.xml -q --no-cov
+          uv run python -m scripts.quality.junit_contract \
+            reports/local-model/junit.xml \
+            --output reports/local-model/acceptance.json \
+            --enforce
+
+      - name: Audit the local-model dependency profile
+        run: |
+          uv export --frozen --extra local --no-dev --no-emit-project --no-hashes \
+            --format requirements-txt --output-file /tmp/local-runtime-requirements.txt
+          uv run pip-audit --requirement /tmp/local-runtime-requirements.txt
+
+  frontend:
+    name: Frontend quality and tests
+    needs: repository-shape
+    if: ${{ needs.repository-shape.outputs.web-present == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+          package-manager-cache: false
+
+      - name: Pin npm toolchain
+        run: | # zizmor: ignore[adhoc-packages] Exact npm bootstrap precedes locked npm ci.
+          npm install --global npm@11.16.0 --ignore-scripts
+          test "$(npm --version)" = "11.16.0"
+
+      - name: Install locked dependencies
+        run: |
+          npm ci
+          test "$(npm approve-scripts --allow-scripts-pending)" = \
+            "No packages with unreviewed install scripts."
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test -- --coverage.reportsDirectory=coverage/default
+
+      - name: Enforce critical browser-auth coverage
+        run: npm run test:auth -- --coverage.reportsDirectory=coverage/auth
+
+      - name: Enforce changed workbench coverage
+        run: npm run test:workbenches -- --coverage.reportsDirectory=coverage/workbenches
+
+      - name: Install Chromium for browser acceptance
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser and accessibility acceptance
+        run: npm run test:e2e -- --project=chromium
+
+      - name: Preserve frontend coverage and browser evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: frontend-quality-${{ github.sha }}
+          path: |
+            apps/web/coverage
+            apps/web/playwright-report
+            apps/web/test-results
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+
+      - name: Build production frontend
+        run: npm run build
+
+  dependency-review:
+    name: Dependency review
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          license-check: true
+          comment-summary-in-pr: never
+
+  codeql:
+    name: CodeQL
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # Upload the CodeQL analysis result to code scanning.
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          languages: python,javascript-typescript
+          config-file: ./.github/codeql-config.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
+        with:
+          category: /language:python-javascript-typescript
+
+  container:
+    name: Container build and scan
+    needs: backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate Compose model
+        run: docker compose config --quiet
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build API image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          load: true
+          push: false
+          tags: corpuskit-api:ci
+          cache-from: type=gha,scope=corpuskit-api
+          cache-to: type=gha,mode=max,scope=corpuskit-api
+
+      - name: Build batch worker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/worker.Dockerfile
+          target: worker-batch
+          load: true
+          push: false
+          tags: corpuskit-worker-batch:ci
+          cache-from: type=gha,scope=corpuskit-worker-batch
+          cache-to: type=gha,mode=max,scope=corpuskit-worker-batch
+
+      - name: Build external-provider worker image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/worker.Dockerfile
+          target: worker-external-provider
+          load: true
+          push: false
+          tags: corpuskit-worker-external-provider:ci
+          cache-from: type=gha,scope=corpuskit-worker-external-provider
+          cache-to: type=gha,mode=max,scope=corpuskit-worker-external-provider
+
+      - name: Smoke-test exact worker images as read-only non-root
+        run: |
+          test "$(docker run --rm --entrypoint id corpuskit-worker-batch:ci -u)" = "10001"
+          docker run --rm \
+            --read-only \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --entrypoint python \
+            corpuskit-worker-batch:ci \
+            -c "import importlib.util; import corpusgen, pulp, pymoo, torch, transformers; import corpuskit.worker.composition; assert importlib.util.find_spec('datasets') is None; assert importlib.util.find_spec('litellm') is None"
+          test "$(docker run --rm --entrypoint id corpuskit-worker-external-provider:ci -u)" = "10001"
+          docker run --rm \
+            --read-only \
+            --network none \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --entrypoint python \
+            corpuskit-worker-external-provider:ci \
+            -c "import importlib.util; import corpusgen, datasets, litellm; import corpuskit.worker.composition; assert importlib.util.find_spec('torch') is None"
+
+      - name: Smoke-test clean Compose migration and API startup
+        env:
+          CORPUSKIT_API_IMAGE_TAG: ci
+          COMPOSE_PROJECT_NAME: corpuskit-ci
+        run: |
+          trap 'docker compose down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT
+          docker compose up --detach --no-build postgres migrate api
+          test "$(docker compose ps --all --format json migrate | jq -r '.ExitCode')" = "0"
+          test "$(docker compose ps --all --format json provision-phoible | jq -r '.ExitCode')" = "0"
+          test "$(docker compose ps --all --format json minio-init | jq -r '.ExitCode')" = "0"
+          docker compose run --rm --no-deps provision-phoible status --json | \
+            jq --exit-status '.state == "ready" and .ready == true'
+          test "$(docker compose run --rm --no-deps --entrypoint id provision-phoible -u)" = "10001"
+          for _attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/api/v1/health/ready >/dev/null; then
+              curl --fail --silent http://127.0.0.1:8000/api/v1/capabilities | \
+                jq --exit-status \
+                  '.checks[] | select(.id == "phoible") | .state == "available"'
+              curl --fail --silent \
+                --header 'Content-Type: application/json' \
+                --data '{"text":"hello","language":"en-us"}' \
+                http://127.0.0.1:8000/api/v1/g2p | \
+                jq --exit-status \
+                  '.text == "hello" and .language == "en-us" and
+                   (.ipa | length > 0) and (.phonemes | length > 0)'
+              test "$(docker inspect "$(docker compose ps --quiet api)" \
+                --format '{{range .Mounts}}{{if eq .Destination "/home/corpuskit/.corpusgen"}}{{.RW}}{{end}}{{end}}')" = "false"
+              docker compose exec --no-TTY postgres \
+                psql --username corpuskit --dbname corpuskit --tuples-only --command \
+                "SELECT version_num FROM alembic_version" | grep --quiet 0009_api_rate_limits
+              docker compose exec --no-TTY postgres \
+                psql --username corpuskit --dbname corpuskit --tuples-only --command \
+                "SELECT count(*) FROM projects WHERE id = '00000000-0000-4000-8000-000000000003'" \
+                | grep --quiet 1
+              artifact_file="$(mktemp)"
+              artifact_download="$(mktemp)"
+              printf '%s\n' 'compose-minio-integrity-smoke' > "$artifact_file"
+              artifact_sha="$(sha256sum "$artifact_file" | cut -d' ' -f1)"
+              artifact_id="$(curl --fail --silent \
+                --form kind=corpus-text \
+                --form expected_sha256="$artifact_sha" \
+                --form file=@"$artifact_file"\;type=text/plain \
+                http://127.0.0.1:8000/api/v1/projects/00000000-0000-4000-8000-000000000003/artifacts \
+                | jq --exit-status --raw-output '.artifact.id')"
+              curl --fail --silent \
+                --output "$artifact_download" \
+                "http://127.0.0.1:8000/api/v1/projects/00000000-0000-4000-8000-000000000003/artifacts/$artifact_id/download"
+              test "$(sha256sum "$artifact_download" | cut -d' ' -f1)" = "$artifact_sha"
+              curl --fail --silent --request DELETE \
+                "http://127.0.0.1:8000/api/v1/projects/00000000-0000-4000-8000-000000000003/artifacts/$artifact_id"
+              maintenance_report="$(docker compose --profile maintenance run --rm --no-deps maintenance)"
+              printf '%s\n' "$maintenance_report" | jq --exit-status \
+                '.schema_id == "corpuskit.maintenance-report.v1" and
+                 .artifact_reconciliation.pages >= 1 and
+                 .staging_cleanup.pages >= 1 and
+                 ([.. | objects | select(has("cursor"))] | length == 0)'
+              docker compose exec --no-TTY postgres \
+                psql --username corpuskit --dbname corpuskit --tuples-only --command \
+                "SELECT count(*) FROM maintenance_cursors" | grep --quiet 2
+              exit 0
+            fi
+            sleep 1
+          done
+          docker compose logs minio minio-init provision-phoible migrate api
+          exit 1
+
+      - name: Smoke-test API image as read-only non-root
+        run: |
+          docker run --detach --rm --name corpuskit-api-ci \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --publish 127.0.0.1:18000:8000 \
+            corpuskit-api:ci
+          trap 'docker stop corpuskit-api-ci >/dev/null 2>&1 || true' EXIT
+          for _attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18000/api/v1/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs corpuskit-api-ci
+          exit 1
+
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corpuskit-api:ci
+          version: ${{ env.TRIVY_VERSION }}
+          format: table
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Scan batch worker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corpuskit-worker-batch:ci
+          version: ${{ env.TRIVY_VERSION }}
+          format: table
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Scan external-provider worker image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corpuskit-worker-external-provider:ci
+          version: ${{ env.TRIVY_VERSION }}
+          format: table
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+      - name: Build web image when the workspace is implemented
+        if: ${{ hashFiles('package-lock.json') != '' && hashFiles('apps/web/package.json') != '' }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          load: true
+          push: false
+          tags: corpuskit-web:ci
+          cache-from: type=gha,scope=corpuskit-web
+          cache-to: type=gha,mode=max,scope=corpuskit-web
+
+      - name: Smoke-test web image as read-only non-root
+        if: ${{ hashFiles('package-lock.json') != '' && hashFiles('apps/web/package.json') != '' }}
+        run: |
+          docker run --detach --rm --name corpuskit-web-ci \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --tmpfs /app/apps/web/.next/cache:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --env CORPUSKIT_API_INTERNAL_URL=http://127.0.0.1:8000/api/v1 \
+            --env CORPUSKIT_ENVIRONMENT=development \
+            --env CORPUSKIT_WEB_AUTH_MODE=demo \
+            --env CORPUSKIT_WEB_STATE_SECRET=AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE \
+            --env 'CORPUSKIT_WEB_SESSION_ENCRYPTION_KEYS=["AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"]' \
+            --env 'CORPUSKIT_WEB_ALLOWED_RETURN_PATHS=["/","/projects","/evaluate","/analysis","/capabilities","/g2p","/inventory","/coverage","/selection","/generation","/advanced","/jobs","/artifacts"]' \
+            --publish 127.0.0.1:13000:3000 \
+            corpuskit-web:ci
+          trap 'docker stop corpuskit-web-ci >/dev/null 2>&1 || true' EXIT
+          test "$(docker exec corpuskit-web-ci id -u)" -ne 0
+          for _attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:13000/ >/dev/null; then
+              curl --fail --silent http://127.0.0.1:13000/auth/session | \
+                jq --exit-status '.authenticated == true'
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs corpuskit-web-ci
+          exit 1
+
+      - name: Scan web image
+        if: ${{ hashFiles('package-lock.json') != '' && hashFiles('apps/web/package.json') != '' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: corpuskit-web:ci
+          version: ${{ env.TRIVY_VERSION }}
+          format: table
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"

@@ -1,0 +1,221 @@
+name: Qualified GPU acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime:
+        description: Qualified GPU runner profile
+        required: true
+        default: linux-container
+        type: choice
+        options:
+          - linux-container
+          - windows-isolated
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualified-gpu-${{ github.ref }}-${{ inputs.runtime }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.12.3"
+
+jobs:
+  linux-container:
+    name: Exact Linux worker images
+    if: ${{ inputs.runtime == 'linux-container' }}
+    runs-on: [self-hosted, linux, x64, gpu, corpuskit-qualified]
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build exact inference and training images
+        run: |
+          docker build --file docker/worker.Dockerfile \
+            --target worker-gpu-inference \
+            --tag corpuskit-worker-gpu-inference:qualified .
+          docker build --file docker/worker.Dockerfile \
+            --target worker-gpu-training \
+            --tag corpuskit-worker-gpu-training:qualified .
+
+      - name: Prove non-root runtime identities
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' corpuskit-worker-gpu-inference:qualified)" = "10001:10001"
+          test "$(docker image inspect --format '{{.Config.User}}' corpuskit-worker-gpu-training:qualified)" = "10001:10001"
+
+      - name: Run real offline CUDA inference, 4-bit/8-bit quantization, perplexity, and DATG
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0777 artifacts/qualified-gpu
+          image_id="$(docker image inspect --format '{{.Id}}' corpuskit-worker-gpu-inference:qualified)"
+          [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker run --rm --gpus all --network none --read-only \
+            --tmpfs /tmp:rw,nosuid,size=2g \
+            --mount "type=bind,source=${PWD}/scripts/gpu,target=/acceptance,readonly" \
+            --mount "type=bind,source=${PWD}/artifacts/qualified-gpu,target=/evidence" \
+            --env CORPUSKIT_ACCEPTANCE_IMAGE_DIGEST="${image_id}" \
+            --env CORPUSKIT_ACCEPTANCE_SOURCE_REVISION="${GITHUB_SHA}" \
+            --env CORPUSKIT_ACCEPTANCE_NETWORK=none \
+            --entrypoint python \
+            corpuskit-worker-gpu-inference:qualified \
+            /acceptance/qualified_runtime_acceptance.py \
+            --mode inference \
+            --output /evidence/inference.json
+
+      - name: Run PEFT training-image to inference-image acceptance chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          training_image_id="$(docker image inspect --format '{{.Id}}' corpuskit-worker-gpu-training:qualified)"
+          inference_image_id="$(docker image inspect --format '{{.Id}}' corpuskit-worker-gpu-inference:qualified)"
+          [[ "${training_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${inference_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          state_root="${RUNNER_TEMP}/corpuskit-qualified-peft-state"
+          test ! -e "${state_root}"
+          install -d -m 0777 "${state_root}"
+          phase_key="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+          [[ "${phase_key}" =~ ^[0-9a-f]{64}$ ]]
+          cleanup_state() {
+            docker run --rm --network none --read-only \
+              --mount "type=bind,source=${state_root},target=/chain-state" \
+              --entrypoint python \
+              corpuskit-worker-gpu-inference:qualified \
+              -c 'import shutil; from pathlib import Path; root=Path("/chain-state"); [(shutil.rmtree(item) if item.is_dir() and not item.is_symlink() else item.unlink()) for item in root.iterdir()]'
+            rmdir "${state_root}"
+          }
+          trap cleanup_state EXIT
+          docker run --rm --gpus all --network none --read-only \
+            --tmpfs /tmp:rw,nosuid,size=2g \
+            --mount "type=bind,source=${PWD}/scripts/gpu,target=/acceptance,readonly" \
+            --mount "type=bind,source=${state_root},target=/chain-state" \
+            --env CORPUSKIT_ACCEPTANCE_IMAGE_DIGEST="${training_image_id}" \
+            --env CORPUSKIT_ACCEPTANCE_SOURCE_REVISION="${GITHUB_SHA}" \
+            --env CORPUSKIT_ACCEPTANCE_NETWORK=none \
+            --env CORPUSKIT_ACCEPTANCE_PHASE_ROLE=gpu-training \
+            --env CORPUSKIT_ACCEPTANCE_PHASE_KEY="${phase_key}" \
+            --entrypoint python \
+            corpuskit-worker-gpu-training:qualified \
+            /acceptance/qualified_runtime_acceptance.py \
+            --mode peft-train \
+            --state-root /chain-state
+          docker run --rm --gpus all --network none --read-only \
+            --tmpfs /tmp:rw,nosuid,size=2g \
+            --mount "type=bind,source=${PWD}/scripts/gpu,target=/acceptance,readonly" \
+            --mount "type=bind,source=${state_root},target=/chain-state" \
+            --mount "type=bind,source=${PWD}/artifacts/qualified-gpu,target=/evidence" \
+            --env CORPUSKIT_ACCEPTANCE_IMAGE_DIGEST="${inference_image_id}" \
+            --env CORPUSKIT_ACCEPTANCE_TRAINING_IMAGE_DIGEST="${training_image_id}" \
+            --env CORPUSKIT_ACCEPTANCE_SOURCE_REVISION="${GITHUB_SHA}" \
+            --env CORPUSKIT_ACCEPTANCE_NETWORK=none \
+            --env CORPUSKIT_ACCEPTANCE_PHASE_ROLE=gpu-inference \
+            --env CORPUSKIT_ACCEPTANCE_PHASE_KEY="${phase_key}" \
+            --entrypoint python \
+            corpuskit-worker-gpu-inference:qualified \
+            /acceptance/qualified_runtime_acceptance.py \
+            --mode peft-infer \
+            --state-root /chain-state \
+            --output /evidence/peft-chain.json
+          cleanup_state
+          trap - EXIT
+          test ! -e "${state_root}"
+
+      - name: Verify PEFT chain state was deleted
+        if: ${{ always() }}
+        shell: bash
+        run: test ! -e "${RUNNER_TEMP}/corpuskit-qualified-peft-state"
+
+      - name: Upload qualified CUDA evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualified-linux-gpu-${{ github.sha }}
+          path: artifacts/qualified-gpu/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  windows-isolated:
+    name: Locked Windows CUDA profile
+    if: ${{ inputs.runtime == 'windows-isolated' }}
+    runs-on: [self-hosted, windows, x64, gpu, corpuskit-qualified]
+    timeout-minutes: 45
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      CORPUSKIT_ACCEPTANCE_NETWORK: offline-local-only
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.12.12
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: scripts/gpu/windows-cu132-v1.lock.txt
+
+      - name: Provision the isolated exact CUDA profile
+        shell: pwsh
+        run: |
+          uv venv .qualified-gpu --python 3.12.12
+          uv pip sync --python .qualified-gpu/Scripts/python.exe scripts/gpu/windows-cu132-v1.lock.txt
+          uv pip install --python .qualified-gpu/Scripts/python.exe --no-deps .
+
+      - name: Run qualified inference, 4-bit/8-bit quantization, and two-phase PEFT chain offline
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/qualified-gpu | Out-Null
+          $lock = (Resolve-Path scripts/gpu/windows-cu132-v1.lock.txt).Path
+          $env:CORPUSKIT_ACCEPTANCE_PROFILE_LOCK = $lock
+          $env:CORPUSKIT_ACCEPTANCE_PROFILE_LOCK_SHA256 = `
+            (Get-FileHash -Algorithm SHA256 $lock).Hash.ToLowerInvariant()
+          $env:CORPUSKIT_ACCEPTANCE_SOURCE_REVISION = $env:GITHUB_SHA
+          .qualified-gpu/Scripts/python.exe scripts/gpu/qualified_runtime_acceptance.py `
+            --mode inference --output artifacts/qualified-gpu/inference.json
+          $runnerTemp = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
+          $stateRoot = Join-Path $runnerTemp `
+            ("corpuskit-qualified-peft-state-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $stateRoot | Out-Null
+          $phaseKeyBytes = [byte[]]::new(32)
+          [Security.Cryptography.RandomNumberGenerator]::Fill($phaseKeyBytes)
+          $env:CORPUSKIT_ACCEPTANCE_PHASE_KEY = `
+            [Convert]::ToHexString($phaseKeyBytes).ToLowerInvariant()
+          try {
+            $env:CORPUSKIT_ACCEPTANCE_PHASE_ROLE = "gpu-training"
+            .qualified-gpu/Scripts/python.exe scripts/gpu/qualified_runtime_acceptance.py `
+              --mode peft-train --state-root $stateRoot
+            $env:CORPUSKIT_ACCEPTANCE_PHASE_ROLE = "gpu-inference"
+            .qualified-gpu/Scripts/python.exe scripts/gpu/qualified_runtime_acceptance.py `
+              --mode peft-infer --state-root $stateRoot `
+              --output artifacts/qualified-gpu/peft-chain.json
+          }
+          finally {
+            if (Test-Path -LiteralPath $stateRoot) {
+              Remove-Item -LiteralPath $stateRoot -Recurse -Force
+            }
+          }
+          if (Test-Path -LiteralPath $stateRoot) {
+            throw "Ephemeral PEFT chain state was not deleted"
+          }
+
+      - name: Upload qualified CUDA evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualified-windows-gpu-${{ github.sha }}
+          path: artifacts/qualified-gpu/*.json
+          if-no-files-found: error
+          retention-days: 30

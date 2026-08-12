@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-dispatcher
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dispatcher
+spec:
+  replicas: {{ .Values.dispatcher.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "dispatcher") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson (dict "temporal" .Values.temporal "batch" .Values.dispatcher.batchSize) | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" . "component" "dispatcher") | nindent 8 }}
+        {{- with .Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.dispatcher }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.global.nodeSelector | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "corpuskit.selectorLabels" (dict "root" . "component" "dispatcher") | nindent 20 }}
+      containers:
+        - name: dispatcher
+          image: {{ include "corpuskit.image" (dict "image" .Values.images.api) | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: [corpuskit-dispatcher]
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" . | nindent 12 }}
+          env:
+            {{- include "corpuskit.dispatcherEnv" (dict "root" . "database" .Values.database.dispatcher) | nindent 12 }}
+            - {name: CORPUSKIT_DISPATCHER_BATCH_SIZE, value: {{ .Values.dispatcher.batchSize | quote }}}
+            - {name: CORPUSKIT_DISPATCHER_POLL_SECONDS, value: {{ .Values.dispatcher.pollSeconds | quote }}}
+          startupProbe:
+            exec: {command: [python, -c, "import pathlib; assert b'corpuskit-dispatcher' in pathlib.Path('/proc/1/cmdline').read_bytes()"]}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec: {command: [python, -c, "import pathlib; assert b'corpuskit-dispatcher' in pathlib.Path('/proc/1/cmdline').read_bytes()"]}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.dispatcher.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        {{- include "corpuskit.tmpVolume" "64Mi" | nindent 8 }}
+---
+{{- if .Values.dispatcher.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-dispatcher
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.dispatcher.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "dispatcher") | nindent 6 }}
+{{- end }}

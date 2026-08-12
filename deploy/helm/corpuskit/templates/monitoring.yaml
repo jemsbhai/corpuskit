@@ -1,0 +1,225 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.releaseLabel }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace }}]
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /internal/metrics
+      scheme: http
+      interval: {{ .Values.monitoring.scrapeInterval }}
+      scrapeTimeout: {{ .Values.monitoring.scrapeTimeout }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.metrics.bearerToken.secretName }}
+          key: {{ .Values.metrics.bearerToken.key }}
+      relabelings:
+        - {targetLabel: corpuskit_environment, replacement: {{ .Values.global.environment }}}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "corpuskit.fullname" . }}
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    release: {{ .Values.monitoring.releaseLabel }}
+spec:
+  groups:
+    - name: corpuskit.control-plane
+      rules:
+        - alert: CorpusKitApiScrapeMissing
+          expr: absent(up{namespace={{ .Release.Namespace | quote }},service={{ printf "%s-api" (include "corpuskit.fullname" .) | quote }}} == 1)
+          for: 5m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit API telemetry is unavailable
+            runbook_url: {{ printf "%s#api-scrape-or-readiness" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitControlPlaneHighErrorRate
+          expr: |
+            sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }},status_class="5xx"}[5m]))
+              /
+            clamp_min(sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }}}[5m])), 0.001) > 0.01
+          for: 5m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit control-plane 5xx rate exceeds 1%
+            runbook_url: {{ printf "%s#control-plane-errors" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitErrorBudgetFastBurn
+          expr: |
+            (
+              sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }},status_class="5xx"}[5m]))
+                /
+              clamp_min(sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }}}[5m])), 0.001)
+            ) > 0.0144
+            and
+            (
+              sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }},status_class="5xx"}[1h]))
+                /
+              clamp_min(sum(rate(corpuskit_http_requests_total{namespace={{ .Release.Namespace | quote }}}[1h])), 0.001)
+            ) > 0.0144
+          for: 5m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit is burning its 99.9% availability budget rapidly
+            runbook_url: {{ printf "%s#error-budget-burn" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitControlPlaneP95LatencyHigh
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(corpuskit_http_request_duration_seconds_bucket{namespace={{ .Release.Namespace | quote }}}[10m]))) > 1
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit control-plane p95 latency exceeds one second
+            runbook_url: {{ printf "%s#control-plane-latency" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitDeploymentUnavailable
+          expr: kube_deployment_status_replicas_unavailable{namespace={{ .Release.Namespace | quote }},deployment=~"{{ include "corpuskit.fullname" . }}-.*"} > 0
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: A CorpusKit deployment has unavailable replicas
+            runbook_url: {{ printf "%s#workload-unavailable" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitPodCrashLooping
+          expr: max_over_time(kube_pod_container_status_waiting_reason{namespace={{ .Release.Namespace | quote }},reason="CrashLoopBackOff",pod=~"{{ include "corpuskit.fullname" . }}-.*"}[10m]) >= 1
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: A CorpusKit workload is crash-looping
+            runbook_url: {{ printf "%s#workload-unavailable" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitHpaAtMaximum
+          expr: kube_horizontalpodautoscaler_status_current_replicas{namespace={{ .Release.Namespace | quote }},horizontalpodautoscaler=~"{{ include "corpuskit.fullname" . }}-.*"} >= kube_horizontalpodautoscaler_spec_max_replicas{namespace={{ .Release.Namespace | quote }},horizontalpodautoscaler=~"{{ include "corpuskit.fullname" . }}-.*"}
+          for: 15m
+          labels: {severity: warning, service: corpuskit}
+          annotations:
+            summary: A CorpusKit workload has remained at its scaling ceiling
+            runbook_url: {{ printf "%s#capacity" .Values.monitoring.runbookBaseUrl | quote }}
+    {{- if .Values.monitoring.contractAlertsEnabled }}
+    - name: corpuskit.dependencies-and-workflows
+      rules:
+        {{- range $dependency := list "database" "artifact-storage" "temporal" "redis" "oidc" }}
+        - alert: CorpusKitDependencyTelemetryMissing
+          expr: absent(corpuskit_dependency_ready{namespace={{ $.Release.Namespace | quote }},dependency={{ $dependency | quote }}})
+          for: 15m
+          labels: {severity: critical, service: corpuskit, dependency: {{ $dependency }}}
+          annotations:
+            summary: Required CorpusKit dependency telemetry is missing
+            runbook_url: {{ printf "%s#dependency-telemetry" $.Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitDependencyNotReady
+          expr: max(corpuskit_dependency_ready{namespace={{ $.Release.Namespace | quote }},dependency={{ $dependency | quote }}}) == 0
+          for: 5m
+          labels: {severity: critical, service: corpuskit, dependency: {{ $dependency }}}
+          annotations:
+            summary: A required CorpusKit dependency is not ready
+            runbook_url: {{ printf "%s#dependency-readiness" $.Values.monitoring.runbookBaseUrl | quote }}
+        {{- end }}
+        - alert: CorpusKitOutboxTelemetryMissing
+          expr: absent(corpuskit_outbox_oldest_pending_seconds{namespace={{ .Release.Namespace | quote }}})
+          for: 15m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit outbox telemetry is missing
+            runbook_url: {{ printf "%s#outbox" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitOutboxLagHigh
+          expr: max(corpuskit_outbox_oldest_pending_seconds{namespace={{ .Release.Namespace | quote }}}) > 30
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit transactional outbox has been pending too long
+            runbook_url: {{ printf "%s#outbox" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitWorkflowTelemetryMissing
+          expr: absent(corpuskit_temporal_task_queue_age_seconds{namespace={{ .Release.Namespace | quote }}})
+          for: 15m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit Temporal queue telemetry is missing
+            runbook_url: {{ printf "%s#temporal" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitCpuQueueAgeHigh
+          expr: histogram_quantile(0.95, sum by (le) (rate(corpuskit_temporal_task_queue_age_seconds_bucket{namespace={{ .Release.Namespace | quote }},worker_profile=~"batch-cpu|external-provider"}[10m]))) > 30
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit CPU or provider queue p95 age exceeds 30 seconds
+            runbook_url: {{ printf "%s#temporal" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitGpuQueueAgeHigh
+          expr: histogram_quantile(0.95, sum by (le) (rate(corpuskit_temporal_task_queue_age_seconds_bucket{namespace={{ .Release.Namespace | quote }},worker_profile=~"gpu-inference|gpu-training"}[10m]))) > 300
+          for: 10m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: CorpusKit GPU queue p95 age exceeds five minutes
+            runbook_url: {{ printf "%s#temporal" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitRunningJobHeartbeatStale
+          expr: max by (worker_profile) (corpuskit_running_job_heartbeat_age_seconds{namespace={{ .Release.Namespace | quote }}}) > 30
+          for: 5m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: A CorpusKit running job has a stale heartbeat
+            runbook_url: {{ printf "%s#workflow-heartbeats" .Values.monitoring.runbookBaseUrl | quote }}
+        {{- if .Values.workers.externalProvider.enabled }}
+        - alert: CorpusKitProviderTelemetryMissing
+          expr: absent(corpuskit_provider_ready{namespace={{ .Release.Namespace | quote }}})
+          for: 15m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: Enabled provider execution lacks readiness telemetry
+            runbook_url: {{ printf "%s#providers" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitProviderNotReady
+          expr: min by (provider) (corpuskit_provider_ready{namespace={{ .Release.Namespace | quote }}}) == 0
+          for: 10m
+          labels: {severity: warning, service: corpuskit}
+          annotations:
+            summary: A configured model provider is not ready
+            runbook_url: {{ printf "%s#providers" .Values.monitoring.runbookBaseUrl | quote }}
+        - alert: CorpusKitProviderDailyBudgetHigh
+          expr: max by (provider) (corpuskit_provider_daily_budget_ratio{namespace={{ .Release.Namespace | quote }}}) > 0.8
+          for: 5m
+          labels: {severity: critical, service: corpuskit}
+          annotations:
+            summary: A CorpusKit provider exceeded 80% of its daily budget
+            runbook_url: {{ printf "%s#providers" .Values.monitoring.runbookBaseUrl | quote }}
+        {{- end }}
+    {{- end }}
+{{- if .Values.monitoring.dashboardEnabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-grafana-dashboard
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  corpuskit-overview.json: |-
+    {
+      "annotations":{"list":[]},
+      "editable":false,
+      "graphTooltip":1,
+      "links":[{"title":"Runbook","type":"link","url":{{ .Values.monitoring.runbookBaseUrl | quote }}}],
+      "panels":[
+        {"id":1,"type":"stat","title":"API targets up","targets":[{"expr":"sum(up{namespace=\"{{ .Release.Namespace }}\",service=\"{{ include "corpuskit.fullname" . }}-api\"})","refId":"A"}],"gridPos":{"h":5,"w":6,"x":0,"y":0}},
+        {"id":2,"type":"stat","title":"5xx rate","targets":[{"expr":"sum(rate(corpuskit_http_requests_total{namespace=\"{{ .Release.Namespace }}\",status_class=\"5xx\"}[5m])) / clamp_min(sum(rate(corpuskit_http_requests_total{namespace=\"{{ .Release.Namespace }}\"}[5m])),0.001)","refId":"A"}],"gridPos":{"h":5,"w":6,"x":6,"y":0}},
+        {"id":3,"type":"timeseries","title":"Request p95 latency","targets":[{"expr":"histogram_quantile(0.95,sum by (le) (rate(corpuskit_http_request_duration_seconds_bucket{namespace=\"{{ .Release.Namespace }}\"}[5m])))","refId":"A"}],"gridPos":{"h":8,"w":12,"x":12,"y":0}},
+        {"id":4,"type":"timeseries","title":"Outbox oldest pending","targets":[{"expr":"max(corpuskit_outbox_oldest_pending_seconds{namespace=\"{{ .Release.Namespace }}\"})","refId":"A"}],"gridPos":{"h":8,"w":8,"x":0,"y":5}},
+        {"id":5,"type":"timeseries","title":"Task queue age p95","targets":[{"expr":"histogram_quantile(0.95,sum by (le,worker_profile) (rate(corpuskit_temporal_task_queue_age_seconds_bucket{namespace=\"{{ .Release.Namespace }}\"}[5m])))","legendFormat":"{{`{{worker_profile}}`}}","refId":"A"}],"gridPos":{"h":8,"w":8,"x":8,"y":8}},
+        {"id":6,"type":"state-timeline","title":"Dependencies","targets":[{"expr":"corpuskit_dependency_ready{namespace=\"{{ .Release.Namespace }}\"}","legendFormat":"{{`{{dependency}}`}}","refId":"A"}],"gridPos":{"h":8,"w":8,"x":16,"y":8}},
+        {"id":7,"type":"timeseries","title":"Provider daily budget ratio","targets":[{"expr":"corpuskit_provider_daily_budget_ratio{namespace=\"{{ .Release.Namespace }}\"}","legendFormat":"{{`{{provider}}`}}","refId":"A"}],"gridPos":{"h":8,"w":12,"x":0,"y":16}},
+        {"id":8,"type":"timeseries","title":"Running heartbeat age","targets":[{"expr":"max by (worker_profile) (corpuskit_running_job_heartbeat_age_seconds{namespace=\"{{ .Release.Namespace }}\"})","legendFormat":"{{`{{worker_profile}}`}}","refId":"A"}],"gridPos":{"h":8,"w":12,"x":12,"y":16}}
+      ],
+      "schemaVersion":39,
+      "tags":["corpuskit","production"],
+      "templating":{"list":[]},
+      "time":{"from":"now-6h","to":"now"},
+      "title":"CorpusKit production overview",
+      "uid":"corpuskit-production-overview",
+      "version":1
+    }
+{{- end }}
+{{- end }}

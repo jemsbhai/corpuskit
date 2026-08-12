@@ -1,0 +1,34 @@
+{
+  "schema_version": "corpuskit.performance-fixture.v1",
+  "language": "en-us",
+  "evaluation": {
+    "repetitions": 10,
+    "sentences": [
+      "The quick brown fox jumps over the lazy dog.",
+      "Clear speech data supports reliable synthesis.",
+      "Bright stars shimmer above the quiet valley.",
+      "Seven curious students compare careful notes.",
+      "A gentle breeze moved through the garden.",
+      "Precise transcripts improve acoustic models.",
+      "Morning sunlight warmed the wooden table.",
+      "The patient reader finished another chapter.",
+      "Small changes can reveal important patterns.",
+      "Natural sentences contain varied speech sounds."
+    ]
+  },
+  "selection": {
+    "candidate_count": 1000,
+    "max_sentences": 32,
+    "target_units": ["p", "b", "t", "k", "m", "n", "s", "z"]
+  },
+  "export": {
+    "format": "json",
+    "sentence_count": 10000,
+    "sentence_template": "Synthetic public benchmark sentence {ordinal}."
+  },
+  "memory": {
+    "job_count": 100,
+    "sentences_per_job": 25,
+    "warmup_jobs": 5
+  }
+}

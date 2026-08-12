@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  {{- if not .Values.web.autoscaling.enabled }}
+  replicas: {{ .Values.web.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson (dict "oidc" .Values.oidc "returns" .Values.web.allowedReturnPaths) | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 8 }}
+        {{- with .Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.web }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.global.nodeSelector | nindent 8 }}
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 14 }}
+      containers:
+        - name: web
+          image: {{ include "corpuskit.image" (dict "image" .Values.images.web) | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - {name: http, containerPort: 3000, protocol: TCP}
+          env:
+            - {name: CORPUSKIT_ENVIRONMENT, value: {{ .Values.global.environment | quote }}}
+            - {name: CORPUSKIT_WEB_AUTH_MODE, value: oidc}
+            - {name: CORPUSKIT_API_INTERNAL_URL, value: {{ printf "http://%s-api:8000/api/v1" (include "corpuskit.fullname" .) | quote }}}
+            - {name: CORPUSKIT_OIDC_ISSUER, value: {{ .Values.oidc.issuer | quote }}}
+            - {name: CORPUSKIT_OIDC_AUDIENCE, value: {{ .Values.oidc.audience | quote }}}
+            - {name: CORPUSKIT_WEB_OIDC_CLIENT_ID, value: {{ .Values.oidc.clientId | quote }}}
+            - {name: CORPUSKIT_WEB_OIDC_REDIRECT_URI, value: {{ .Values.oidc.redirectUri | quote }}}
+            - {name: CORPUSKIT_WEB_OIDC_SCOPES, value: {{ .Values.oidc.scopes | quote }}}
+            - {name: CORPUSKIT_WEB_ALLOWED_RETURN_PATHS, value: {{ toJson .Values.web.allowedReturnPaths | quote }}}
+            - name: CORPUSKIT_WEB_OIDC_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: {{ .Values.oidc.clientSecret.secretName }}, key: {{ .Values.oidc.clientSecret.key }}}}
+            - name: CORPUSKIT_WEB_SESSION_REDIS_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.web.sessionRedis.secretName }}, key: {{ .Values.web.sessionRedis.key }}}}
+            - name: CORPUSKIT_WEB_STATE_SECRET
+              valueFrom: {secretKeyRef: {name: {{ .Values.web.stateSecret.secretName }}, key: {{ .Values.web.stateSecret.key }}}}
+            - name: CORPUSKIT_WEB_SESSION_ENCRYPTION_KEYS
+              valueFrom: {secretKeyRef: {name: {{ .Values.web.sessionEncryptionKeys.secretName }}, key: {{ .Values.web.sessionEncryptionKeys.key }}}}
+          startupProbe: {httpGet: {path: /, port: http}, periodSeconds: 2, failureThreshold: 30}
+          livenessProbe: {httpGet: {path: /, port: http}, periodSeconds: 15, timeoutSeconds: 3, failureThreshold: 3}
+          readinessProbe: {httpGet: {path: /, port: http}, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+          lifecycle:
+            preStop:
+              sleep: {seconds: 10}
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        {{- include "corpuskit.tmpVolume" "128Mi" | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 4 }}
+  ports:
+    - {name: http, port: 3000, targetPort: http, protocol: TCP}
+---
+{{- if .Values.web.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.web.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+{{- end }}
+---
+{{- if .Values.web.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "corpuskit.fullname" . }}-web}
+  minReplicas: {{ .Values.web.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.web.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300, policies: [{type: Percent, value: 25, periodSeconds: 60}]}
+    scaleUp: {stabilizationWindowSeconds: 30, policies: [{type: Percent, value: 100, periodSeconds: 60}]}
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: {{ .Values.web.autoscaling.cpuUtilization }}}}
+    - type: Resource
+      resource: {name: memory, target: {type: Utilization, averageUtilization: {{ .Values.web.autoscaling.memoryUtilization }}}}
+{{- end }}
