@@ -380,6 +380,17 @@ def test_durable_workflow_coverage_includes_persistence_and_trusted_input_suites
     assert "--cov-fail-under=90" in coverage_step
 
 
+def test_backend_pr_diff_coverage_checkout_retains_merge_history() -> None:
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    backend = ci.split("  backend:\n", maxsplit=1)[1].split("\n  migrations:\n", maxsplit=1)[0]
+    checkout = backend.split("      - name: Check out source\n", maxsplit=1)[1].split(
+        "\n      - name:", maxsplit=1
+    )[0]
+
+    assert "          fetch-depth: 0\n" in checkout
+    assert backend.count('git fetch --no-tags --depth=1 origin "${BASE_REF}"') == 2
+
+
 def test_ci_selects_exact_postgresql_17_client_tools_for_later_steps() -> None:
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     install = ci.split("      - name: Install matching PostgreSQL 17 client tools\n", maxsplit=1)[

@@ -150,9 +150,17 @@ describe("OIDC route flow", () => {
   });
 
   it("rejects an oversized callback before provider exchange and clears correlation", async () => {
+    const started = await login(new Request("https://web.example/auth/login"));
+    const loginCookie = started.headers.get("set-cookie") ?? "";
+    const correlation = cookieValue(loginCookie, "__Host-corpuskit_login");
+    const state = new URL(
+      started.headers.get("location") ?? "",
+    ).searchParams.get("state");
     const prefix = "https://web.example/auth/callback?code=";
+    const suffix = `&state=${encodeURIComponent(state ?? "")}`;
     const request = new Request(
-      `${prefix}${"a".repeat(8_193 - prefix.length)}`,
+      `${prefix}${"a".repeat(8_193 - prefix.length - suffix.length)}${suffix}`,
+      { headers: { cookie: `__Host-corpuskit_login=${correlation}` } },
     );
     expect(request.url).toHaveLength(8_193);
 
@@ -165,6 +173,7 @@ describe("OIDC route flow", () => {
     expect(response.headers.get("set-cookie")).toContain(
       "__Host-corpuskit_login=;",
     );
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(oidc.exchange).not.toHaveBeenCalled();
   });
 
