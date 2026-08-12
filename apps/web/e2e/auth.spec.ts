@@ -42,49 +42,8 @@ test("local auth boundary issues a strict opaque cookie and enforces CSRF logout
     browserName === "webkit",
     "WebKit correctly declines Secure cookies on the HTTP-only local test server; production acceptance runs over TLS.",
   );
-  let sessionResponse!: {
-    status: number;
-    headers: { name: string; value: string }[];
-    session: {
-      authenticated: boolean;
-      csrfToken: string;
-      subject: string;
-      expiresAt: string;
-    };
-  };
-  const sessionResponsePromise = page.waitForResponse(async (response) => {
-    if (new URL(response.url()).pathname !== "/auth/session") return false;
-
-    const status = response.status();
-    const [session, headers] = await Promise.all([
-      response.json() as Promise<{
-        authenticated: boolean;
-        csrfToken: string;
-        subject: string;
-        expiresAt: string;
-      }>,
-      response.headersArray(),
-    ]);
-    sessionResponse = { status, headers, session };
-    return true;
-  });
   await page.goto("/");
-  await sessionResponsePromise;
-  expect(sessionResponse.status).toBe(200);
-  const setCookie = sessionResponse.headers
-    .filter(({ name }) => name.toLowerCase() === "set-cookie")
-    .map(({ value }) => value)
-    .join("\n");
-  expect(setCookie).toContain("SameSite=Lax");
-  const { session } = sessionResponse;
-  expect(session).toMatchObject({
-    authenticated: true,
-    subject: "deterministic-test-user",
-  });
-  expect(session.csrfToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
-  expect(Date.parse(session.expiresAt)).toBeGreaterThan(Date.now());
-  expect(JSON.stringify(session)).not.toMatch(/access|refresh|id.?token/iu);
-
+  await expect(page.getByText(/^Signed in as /u)).toBeVisible();
   const cookies = await context.cookies();
   const cookie = cookies.find(
     ({ name }) => name === "__Host-corpuskit_session",
@@ -92,9 +51,34 @@ test("local auth boundary issues a strict opaque cookie and enforces CSRF logout
   expect(cookie).toMatchObject({
     httpOnly: true,
     secure: true,
+    sameSite: "Lax",
     path: "/",
   });
   expect(cookie?.value).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+
+  const sessionResponse = await context.request.get(
+    new URL("/auth/session", page.url()).href,
+    { headers: { Accept: "application/json" } },
+  );
+  expect(sessionResponse.status()).toBe(200);
+  const setCookie = (await sessionResponse.headersArray())
+    .filter(({ name }) => name.toLowerCase() === "set-cookie")
+    .map(({ value }) => value)
+    .join("\n");
+  expect(setCookie).toContain("SameSite=Lax");
+  const session = (await sessionResponse.json()) as {
+    authenticated: boolean;
+    csrfToken: string;
+    subject: string;
+    expiresAt: string;
+  };
+  expect(session).toMatchObject({
+    authenticated: true,
+    subject: "deterministic-test-user",
+  });
+  expect(session.csrfToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+  expect(Date.parse(session.expiresAt)).toBeGreaterThan(Date.now());
+  expect(JSON.stringify(session)).not.toMatch(/access|refresh|id.?token/iu);
 
   const denied = await page.evaluate(async () => {
     const response = await fetch("/auth/logout", {
