@@ -1,0 +1,59 @@
+{{- if .Values.maintenance.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-maintenance
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: maintenance
+spec:
+  schedule: {{ .Values.maintenance.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: {{ .Values.maintenance.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.maintenance.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "corpuskit.selectorLabels" (dict "root" . "component" "maintenance") | nindent 12 }}
+        spec:
+          serviceAccountName: {{ .Values.serviceAccounts.maintenance }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          nodeSelector:
+            {{- toYaml .Values.global.nodeSelector | nindent 12 }}
+          restartPolicy: Never
+          securityContext:
+            {{- include "corpuskit.podSecurityContext" . | nindent 12 }}
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: maintenance
+              image: {{ include "corpuskit.image" (dict "image" .Values.images.api) | quote }}
+              imagePullPolicy: {{ .Values.images.pullPolicy }}
+              command: [corpuskit-maintenance]
+              args:
+                - run-once
+                - --limit
+                - {{ .Values.maintenance.limit | quote }}
+                - --max-reconciliation-pages
+                - {{ .Values.maintenance.maxReconciliationPages | quote }}
+                - --max-staging-pages
+                - {{ .Values.maintenance.maxStagingPages | quote }}
+              securityContext:
+                {{- include "corpuskit.containerSecurityContext" . | nindent 16 }}
+              env:
+                {{- include "corpuskit.maintenanceEnv" (dict "root" . "database" .Values.database.maintenance "artifactCredentials" .Values.artifactStorage.credentials.maintenance) | nindent 16 }}
+              resources:
+                {{- toYaml .Values.maintenance.resources | nindent 16 }}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            {{- include "corpuskit.tmpVolume" "128Mi" | nindent 12 }}
+{{- end }}

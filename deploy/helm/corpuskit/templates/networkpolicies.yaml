@@ -1,0 +1,205 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-default-deny
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api-ingress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 14 }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoring.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.monitoring.podSelector | nindent 14 }}
+        {{- if .Values.monitoring.otelCollector.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "telemetry") | nindent 14 }}
+        {{- end }}
+      ports: [{protocol: TCP, port: 8000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web-ingress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+      ports: [{protocol: TCP, port: 3000}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.database "port" .Values.database.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.temporal "port" .Values.temporal.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.artifactStorage "port" 443) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.oidc "port" 443) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-web-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8000}]
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.redis "port" .Values.networkPolicy.ports.redis) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.oidc "port" 443) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-dispatcher-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "dispatcher") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.database "port" .Values.database.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.temporal "port" .Values.temporal.port) | nindent 4 }}
+{{- $root := . }}
+{{- $workerPolicies := list (dict "name" "worker-batch" "provider" false) (dict "name" "worker-external-provider" "provider" true) (dict "name" "worker-gpu-inference" "provider" false) (dict "name" "worker-gpu-training" "provider" false) }}
+{{- range $worker := $workerPolicies }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" $root }}-{{ $worker.name }}-egress
+  labels: {{- include "corpuskit.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" $root "component" $worker.name) | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" $root | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" $root.Values.networkPolicy.cidrs.database "port" $root.Values.database.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" $root.Values.networkPolicy.cidrs.temporal "port" $root.Values.temporal.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" $root.Values.networkPolicy.cidrs.artifactStorage "port" 443) | nindent 4 }}
+    {{- if $worker.provider }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" $root.Values.networkPolicy.cidrs.providers "port" 443) | nindent 4 }}
+    {{- end }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-migrator-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "migrator") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.database "port" .Values.database.port) | nindent 4 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-maintenance-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "maintenance") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.database "port" .Values.database.port) | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.artifactStorage "port" 443) | nindent 4 }}
+{{- if and .Values.phoible.enabled (not .Values.phoible.sourceClaim) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-phoible-egress
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "phoible") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.phoibleSource "port" 443) | nindent 4 }}
+{{- end }}
+{{- if .Values.monitoring.otelCollector.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-telemetry
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "telemetry") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app.kubernetes.io/name, operator: In, values: [{{ include "corpuskit.name" . }}]}
+      ports: [{protocol: TCP, port: 4317}, {protocol: TCP, port: 4318}]
+  egress:
+    {{- include "corpuskit.dnsEgress" . | nindent 4 }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8000}]
+    {{- include "corpuskit.cidrEgress" (dict "cidrs" .Values.networkPolicy.cidrs.telemetryExporter "port" 443) | nindent 4 }}
+{{- end }}
+{{- end }}

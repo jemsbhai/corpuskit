@@ -1,0 +1,307 @@
+name: Verify immutable promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable CorpusKit release tag (for example v0.1.0-alpha.1)
+        required: true
+        type: string
+      environment:
+        description: Approval-protected promotion target
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      rollback_tag:
+        description: Immutable lower version to use for rollback (required for production)
+        required: false
+        type: string
+      acceptance_evidence_url:
+        description: HTTPS release/checklist or staging-soak evidence
+        required: true
+        type: string
+      change_record_url:
+        description: HTTPS approved change or deployment record
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: promotion-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  GH_API_VERSION: "2026-03-10"
+  COSIGN_VERSION: v3.1.3
+  BUILDX_VERSION: v0.36.1
+
+jobs:
+  environment-policy:
+    name: Require a protected target environment
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # Read the target-environment protection policy.
+      contents: read
+    steps:
+      - name: Verify environment reviewers and evidence inputs
+        shell: bash
+        env:
+          ACCEPTANCE_EVIDENCE_URL: ${{ inputs.acceptance_evidence_url }}
+          CHANGE_RECORD_URL: ${{ inputs.change_record_url }}
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_ENVIRONMENT: ${{ inputs.environment }}
+          REPOSITORY: ${{ github.repository }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          for name in ("ACCEPTANCE_EVIDENCE_URL", "CHANGE_RECORD_URL"):
+              value = os.environ[name]
+              parsed = urlsplit(value)
+              if (
+                  parsed.scheme != "https"
+                  or not parsed.hostname
+                  or parsed.username is not None
+                  or parsed.password is not None
+                  or parsed.query
+                  or parsed.fragment
+                  or parsed.port not in (None, 443)
+                  or any(character.isspace() for character in value)
+              ):
+                  raise SystemExit(f"{name} must be a non-secret HTTPS evidence permalink")
+          PY
+          if [[ "${PROMOTION_ENVIRONMENT}" == production ]]; then
+            test -n "${ROLLBACK_TAG}"
+          fi
+          environment_json="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/environments/${PROMOTION_ENVIRONMENT}")"
+          jq -e '
+            [.protection_rules[]
+              | select(.type == "required_reviewers")
+              | select(.prevent_self_review == true)
+              | .reviewers
+              | length]
+            | any(. > 0)
+          ' <<<"${environment_json}" >/dev/null
+
+  verify:
+    name: Verify build-once promotion by digest
+    needs: environment-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment }}
+    permissions:
+      attestations: read # Verify package, manifest, checksum, and OCI attestations.
+      contents: read
+      packages: read # Pull and verify existing GHCR digests without mutation.
+    steps:
+      - name: Check out the immutable candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Log in to GHCR read-only
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up pinned Docker Buildx inspection tooling
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          cache-binary: false
+          cleanup: true
+
+      - name: Download and verify immutable candidate release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release/release_contract.py versions --tag "${TAG}"
+          install -d candidate-assets
+          gh release verify "${TAG}" --repo "${GITHUB_REPOSITORY}"
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir candidate-assets
+          for asset in candidate-assets/*; do
+            gh release verify-asset "${TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}"
+          done
+          python scripts/release/release_contract.py verify-assets \
+            --assets candidate-assets \
+            --tag "${TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "$(git rev-parse HEAD)"
+
+      - name: Verify all blob signatures and GitHub attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${TAG}"
+          for artifact in \
+            candidate-assets/*.whl candidate-assets/*.tar.gz \
+            candidate-assets/*.spdx.json candidate-assets/*.cdx.json \
+            candidate-assets/release-manifest.json candidate-assets/SHA256SUMS; do
+            cosign verify-blob \
+              --bundle "${artifact}.sigstore.json" \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${artifact}"
+          done
+          for artifact in candidate-assets/*.whl candidate-assets/*.tar.gz; do
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://spdx.dev/Document/v2.3"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://cyclonedx.org/bom"
+          done
+          gh attestation verify candidate-assets/release-manifest.json \
+            --repo "${GITHUB_REPOSITORY}"
+          gh attestation verify candidate-assets/SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}"
+
+      - name: Verify every image signature, attestation, and immutable version tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${TAG}"
+          while IFS=$'\t' read -r image digest reference; do
+            resolved_digest="$(docker buildx imagetools inspect \
+              "${image}:${TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+            test "${resolved_digest}" = "${digest}"
+            cosign verify \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${reference}" >/dev/null
+            gh attestation verify "oci://${reference}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "oci://${reference}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://spdx.dev/Document/v2.3"
+            gh attestation verify "oci://${reference}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://cyclonedx.org/bom"
+          done < <(jq -r '.images[] | [.image, .digest, .reference] | @tsv' \
+            candidate-assets/release-manifest.json)
+
+      - name: Verify the rollback release without rebuilding
+        if: ${{ inputs.rollback_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release/release_contract.py rollback \
+            --candidate "${TAG}" \
+            --rollback "${ROLLBACK_TAG}"
+          install -d rollback-assets
+          gh release verify "${ROLLBACK_TAG}" --repo "${GITHUB_REPOSITORY}"
+          gh release download "${ROLLBACK_TAG}" --repo "${GITHUB_REPOSITORY}" --dir rollback-assets
+          for asset in rollback-assets/*; do
+            gh release verify-asset "${ROLLBACK_TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}"
+          done
+          python scripts/release/release_contract.py verify-assets \
+            --assets rollback-assets \
+            --tag "${ROLLBACK_TAG}" \
+            --repository "${GITHUB_REPOSITORY}"
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${ROLLBACK_TAG}"
+          cosign verify-blob \
+            --bundle rollback-assets/release-manifest.json.sigstore.json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            rollback-assets/release-manifest.json
+          cosign verify-blob \
+            --bundle rollback-assets/SHA256SUMS.sigstore.json \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            rollback-assets/SHA256SUMS
+          gh attestation verify rollback-assets/release-manifest.json \
+            --repo "${GITHUB_REPOSITORY}"
+          gh attestation verify rollback-assets/SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}"
+          while IFS=$'\t' read -r image digest reference; do
+            resolved_digest="$(docker buildx imagetools inspect \
+              "${image}:${ROLLBACK_TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+            test "${resolved_digest}" = "${digest}"
+            cosign verify \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${reference}" >/dev/null
+            gh attestation verify "oci://${reference}" --repo "${GITHUB_REPOSITORY}"
+          done < <(jq -r '.images[] | [.image, .digest, .reference] | @tsv' \
+            rollback-assets/release-manifest.json)
+
+      - name: Write the approved digest-only promotion plan
+        shell: bash
+        env:
+          ACCEPTANCE_EVIDENCE_URL: ${{ inputs.acceptance_evidence_url }}
+          CHANGE_RECORD_URL: ${{ inputs.change_record_url }}
+          PROMOTION_ENVIRONMENT: ${{ inputs.environment }}
+          ROLLBACK_TAG: ${{ inputs.rollback_tag }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          candidate_manifest_sha256="$(sha256sum candidate-assets/release-manifest.json | cut -d' ' -f1)"
+          rollback_manifest_sha256=""
+          if [[ -n "${ROLLBACK_TAG}" ]]; then
+            rollback_manifest_sha256="$(sha256sum rollback-assets/release-manifest.json | cut -d' ' -f1)"
+          fi
+          jq -n \
+            --arg schema_version "1" \
+            --arg environment "${PROMOTION_ENVIRONMENT}" \
+            --arg candidate_tag "${TAG}" \
+            --arg candidate_manifest_sha256 "${candidate_manifest_sha256}" \
+            --arg rollback_tag "${ROLLBACK_TAG}" \
+            --arg rollback_manifest_sha256 "${rollback_manifest_sha256}" \
+            --arg acceptance_evidence_url "${ACCEPTANCE_EVIDENCE_URL}" \
+            --arg change_record_url "${CHANGE_RECORD_URL}" \
+            --arg workflow_run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --slurpfile candidate candidate-assets/release-manifest.json \
+            '{
+              schema_version: ($schema_version | tonumber),
+              environment: $environment,
+              candidate_tag: $candidate_tag,
+              candidate_manifest_sha256: $candidate_manifest_sha256,
+              candidate_images: $candidate[0].images | map(.reference),
+              rollback_tag: (if $rollback_tag == "" then null else $rollback_tag end),
+              rollback_manifest_sha256: (
+                if $rollback_manifest_sha256 == "" then null else $rollback_manifest_sha256 end
+              ),
+              acceptance_evidence_url: $acceptance_evidence_url,
+              change_record_url: $change_record_url,
+              workflow_run: $workflow_run
+            }' >promotion-plan.json
+          jq -e '.candidate_images | length == 6' promotion-plan.json >/dev/null
+
+      - name: Preserve the approved promotion plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promotion-${{ inputs.environment }}-${{ inputs.tag }}-${{ github.run_id }}
+          path: promotion-plan.json
+          if-no-files-found: error
+          retention-days: 90

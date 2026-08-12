@@ -1,0 +1,48 @@
+# Python
+.venv/
+.qualified-gpu/
+__pycache__/
+*.py[cod]
+.coverage
+.coverage.*
+coverage.xml
+coverage-*.json
+htmlcov/
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+mutants/
+dist/
+build/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+playwright-report/
+/apps/web/playwright-live-report/
+test-results/
+/coverage/
+apps/web/coverage/
+/apps/web/certificates/
+*.tsbuildinfo
+
+# Runtime data and secrets
+.env
+.env.*
+!.env.example
+.corpuskit/
+data/
+/artifacts/
+*.db
+*.sqlite3
+
+# Tooling / OS
+.tmp-*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+site/

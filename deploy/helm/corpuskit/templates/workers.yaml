@@ -1,0 +1,175 @@
+{{- $root := . -}}
+{{- $profiles := list
+  (dict "enabled" .Values.workers.batch.enabled "name" "worker-batch" "queue" "batch-cpu" "values" .Values.workers.batch "image" .Values.images.workerBatch "database" .Values.database.workerBatch "adoption" .Values.database.adoptionBatch "artifact" .Values.artifactStorage.credentials.workerBatch "temporal" .Values.temporal.credentials.workerBatch "serviceAccount" .Values.serviceAccounts.workerBatch)
+  (dict "enabled" .Values.workers.externalProvider.enabled "name" "worker-external-provider" "queue" "external-provider" "values" .Values.workers.externalProvider "image" .Values.images.workerExternalProvider "database" .Values.database.workerExternalProvider "adoption" .Values.database.adoptionExternalProvider "artifact" .Values.artifactStorage.credentials.workerExternalProvider "temporal" .Values.temporal.credentials.workerExternalProvider "serviceAccount" .Values.serviceAccounts.workerExternalProvider)
+  (dict "enabled" .Values.workers.gpuInference.enabled "name" "worker-gpu-inference" "queue" "gpu-inference" "values" .Values.workers.gpuInference "image" .Values.images.workerGpuInference "database" .Values.database.workerGpuInference "adoption" .Values.database.adoptionGpuInference "artifact" .Values.artifactStorage.credentials.workerGpuInference "temporal" .Values.temporal.credentials.workerGpuInference "serviceAccount" .Values.serviceAccounts.workerGpuInference)
+  (dict "enabled" .Values.workers.gpuTraining.enabled "name" "worker-gpu-training" "queue" "gpu-training" "values" .Values.workers.gpuTraining "image" .Values.images.workerGpuTraining "database" .Values.database.workerGpuTraining "adoption" .Values.database.adoptionGpuTraining "artifact" .Values.artifactStorage.credentials.workerGpuTraining "temporal" .Values.temporal.credentials.workerGpuTraining "serviceAccount" .Values.serviceAccounts.workerGpuTraining)
+-}}
+{{- range $profile := $profiles }}
+{{- if $profile.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "corpuskit.fullname" $root }}-{{ $profile.name }}
+  labels:
+    {{- include "corpuskit.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $profile.name }}
+    corpuskit.io/worker-profile: {{ $profile.queue }}
+spec:
+  {{- if not $profile.values.autoscaling.enabled }}
+  replicas: {{ $profile.values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" $root "component" $profile.name) | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/runtime-policy: {{ toJson $profile.values | sha256sum }}
+        {{- with $root.Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" $root "component" $profile.name) | nindent 8 }}
+        corpuskit.io/worker-profile: {{ $profile.queue }}
+        {{- with $root.Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ $profile.serviceAccount }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml $root.Values.global.nodeSelector | nindent 8 }}
+        {{- with $profile.values.nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      terminationGracePeriodSeconds: {{ add $root.Values.workers.common.gracefulShutdownSeconds 30 }}
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" $root | nindent 8 }}
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $profile.values.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "corpuskit.selectorLabels" (dict "root" $root "component" $profile.name) | nindent 20 }}
+      containers:
+        - name: worker
+          image: {{ include "corpuskit.image" (dict "image" $profile.image) | quote }}
+          imagePullPolicy: {{ $root.Values.images.pullPolicy }}
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" $root | nindent 12 }}
+          env:
+            {{- include "corpuskit.workerEnv" (dict "root" $root "database" $profile.database "adoptionDatabase" $profile.adoption "artifactCredentials" $profile.artifact "temporalCredentials" $profile.temporal "profile" $profile.queue) | nindent 12 }}
+            - {name: CORPUSKIT_WORKER_GRACEFUL_SHUTDOWN_SECONDS, value: {{ $root.Values.workers.common.gracefulShutdownSeconds | quote }}}
+            - {name: CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS, value: {{ $profile.values.deadlineSeconds | quote }}}
+            - {name: CORPUSKIT_WORKER_IMAGE_DIGEST, value: {{ $profile.image.digest | quote }}}
+            - {name: TMPDIR, value: /run/corpuskit-espeak}
+            - {name: XDG_CONFIG_HOME, value: /tmp/corpuskit-xdg}
+            {{- if eq $profile.queue "batch-cpu" }}
+            - {name: CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES, value: {{ toJson $profile.values.datgRuntimePolicies | quote }}}
+            - {name: CORPUSKIT_WORKER_DATG_MODEL_CACHE_ROOT, value: /models}
+            - {name: CORPUSKIT_WORKER_DATG_INDEX_PUBLISH_ROOT, value: /datg-index-publish}
+            - {name: CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY, value: "true"}
+            {{- else if eq $profile.queue "external-provider" }}
+            - {name: CORPUSKIT_WORKER_HOSTED_MODEL_POLICIES, value: {{ toJson $profile.values.hostedModelPolicies | quote }}}
+            - {name: CORPUSKIT_WORKER_HUGGINGFACE_REPOSITORY_POLICIES, value: {{ toJson $profile.values.huggingFaceRepositoryPolicies | quote }}}
+            {{- range $secret := $profile.values.providerSecrets }}
+            - name: {{ $secret.name }}
+              valueFrom: {secretKeyRef: {name: {{ $secret.secretName }}, key: {{ $secret.key }}}}
+            {{- end }}
+            {{- else if eq $profile.queue "gpu-inference" }}
+            - {name: CORPUSKIT_WORKER_LOCAL_MODEL_POLICIES, value: {{ toJson $profile.values.localModelPolicies | quote }}}
+            - {name: CORPUSKIT_WORKER_MODEL_CACHE_ROOT, value: /models}
+            - {name: CORPUSKIT_WORKER_MODEL_CACHE_MOUNT_READ_ONLY, value: "true"}
+            - {name: CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES, value: {{ toJson $profile.values.datgRuntimePolicies | quote }}}
+            - {name: CORPUSKIT_WORKER_DATG_MODEL_CACHE_ROOT, value: /models}
+            - {name: CORPUSKIT_WORKER_DATG_INDEX_CACHE_ROOT, value: /datg-indexes}
+            - {name: CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY, value: "true"}
+            {{- else if eq $profile.queue "gpu-training" }}
+            - {name: CORPUSKIT_WORKER_PHON_RL_RUNTIME_POLICIES, value: {{ toJson $profile.values.phonRlRuntimePolicies | quote }}}
+            - {name: CORPUSKIT_WORKER_PHON_RL_CACHE_ROOTS, value: {{ toJson $profile.values.phonRlCacheRoots | quote }}}
+            {{- end }}
+          startupProbe:
+            exec: {command: [python, -c, "import pathlib; assert b'corpuskit-worker' in pathlib.Path('/proc/1/cmdline').read_bytes()"]}
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            exec: {command: [python, -c, "import pathlib; assert b'corpuskit-worker' in pathlib.Path('/proc/1/cmdline').read_bytes()"]}
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml $profile.values.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: espeak-tmp, mountPath: /run/corpuskit-espeak}
+            - {name: phoible-cache, mountPath: /home/corpuskit/.corpusgen, readOnly: true}
+            {{- if ne $profile.queue "external-provider" }}
+            - {name: model-cache, mountPath: /models, readOnly: true}
+            {{- end }}
+            {{- if eq $profile.queue "gpu-inference" }}
+            - {name: datg-index-cache, mountPath: /datg-indexes, readOnly: true}
+            {{- else if eq $profile.queue "batch-cpu" }}
+            - {name: datg-index-cache, mountPath: /datg-index-publish, readOnly: false}
+            {{- end }}
+      volumes:
+        {{- include "corpuskit.tmpVolume" (ternary "1Gi" "256Mi" (hasPrefix "gpu-" $profile.queue)) | nindent 8 }}
+        {{- include "corpuskit.espeakTmpVolume" $root | nindent 8 }}
+        - name: phoible-cache
+          persistentVolumeClaim: {claimName: {{ $root.Values.phoible.cacheClaim }}}
+        {{- if ne $profile.queue "external-provider" }}
+        - name: model-cache
+          persistentVolumeClaim: {claimName: {{ $root.Values.workers.common.modelCacheClaim }}}
+        {{- end }}
+        {{- if or (eq $profile.queue "batch-cpu") (eq $profile.queue "gpu-inference") }}
+        - name: datg-index-cache
+          persistentVolumeClaim: {claimName: {{ $root.Values.workers.common.datgIndexCacheClaim }}}
+        {{- end }}
+{{- if $profile.values.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "corpuskit.fullname" $root }}-{{ $profile.name }}
+  labels: {{- include "corpuskit.labels" $root | nindent 4 }}
+spec:
+  minAvailable: {{ $profile.values.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" $root "component" $profile.name) | nindent 6 }}
+{{- end }}
+{{- if $profile.values.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "corpuskit.fullname" $root }}-{{ $profile.name }}
+  labels: {{- include "corpuskit.labels" $root | nindent 4 }}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "corpuskit.fullname" $root }}-{{ $profile.name }}}
+  minReplicas: {{ $profile.values.autoscaling.minReplicas }}
+  maxReplicas: {{ $profile.values.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 600, policies: [{type: Pods, value: 1, periodSeconds: 120}]}
+    scaleUp: {stabilizationWindowSeconds: 30, policies: [{type: Percent, value: 100, periodSeconds: 60}]}
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: {{ $profile.values.autoscaling.cpuUtilization }}}}
+{{- end }}
+{{- end }}
+{{- end }}

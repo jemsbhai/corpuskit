@@ -1,0 +1,162 @@
+{{- $apiPolicies := dict "hosted" .Values.workers.externalProvider.hostedModelPolicies "huggingFace" .Values.workers.externalProvider.huggingFaceRepositoryPolicies "local" .Values.workers.gpuInference.localModelPolicies "datg" (concat .Values.workers.batch.datgRuntimePolicies .Values.workers.gpuInference.datgRuntimePolicies) "phonRl" .Values.workers.gpuTraining.phonRlRuntimePolicies -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if not .Values.api.autoscaling.enabled }}
+  replicas: {{ .Values.api.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson (dict "oidc" .Values.oidc "temporal" .Values.temporal "artifact" .Values.artifactStorage.endpoint "policies" $apiPolicies "rateLimit" .Values.api.rateLimit) | sha256sum }}
+        {{- with .Values.global.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 8 }}
+        {{- with .Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.api }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.global.nodeSelector | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      containers:
+        - name: api
+          image: {{ include "corpuskit.image" (dict "image" .Values.images.api) | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - {name: http, containerPort: 8000, protocol: TCP}
+          env:
+            {{- include "corpuskit.apiEnv" (dict "root" . "database" .Values.database.api "artifactCredentials" .Values.artifactStorage.credentials.api) | nindent 12 }}
+            - {name: CORPUSKIT_API_BIND_HOST, value: "0.0.0.0"}
+            - name: CORPUSKIT_MAX_UPLOAD_BYTES
+              value: {{ .Values.api.maxUploadBytes | quote }}
+            - {name: CORPUSKIT_WORKER_DATG_INDEX_CACHE_ROOT, value: /datg-indexes}
+            - {name: CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY, value: "true"}
+            - {name: TMPDIR, value: /run/corpuskit-espeak}
+            - {name: XDG_CONFIG_HOME, value: /tmp/corpuskit-xdg}
+          startupProbe:
+            httpGet: {path: /api/v1/health/live, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /api/v1/health/live, port: http}
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /api/v1/health/ready, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              sleep: {seconds: 10}
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: espeak-tmp, mountPath: /run/corpuskit-espeak}
+            - {name: phoible-cache, mountPath: /home/corpuskit/.corpusgen, readOnly: true}
+            - {name: datg-index-cache, mountPath: /datg-indexes, readOnly: true}
+      volumes:
+        {{- include "corpuskit.tmpVolume" "128Mi" | nindent 8 }}
+        {{- include "corpuskit.espeakTmpVolume" . | nindent 8 }}
+        - name: phoible-cache
+          persistentVolumeClaim:
+            claimName: {{ .Values.phoible.cacheClaim }}
+        - name: datg-index-cache
+          persistentVolumeClaim:
+            claimName: {{ .Values.workers.common.datgIndexCacheClaim }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - {name: http, port: 8000, targetPort: http, protocol: TCP}
+---
+{{- if .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "corpuskit.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+{{- end }}
+---
+{{- if .Values.api.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-api
+  labels: {{- include "corpuskit.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: {{ include "corpuskit.fullname" . }}-api}
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{type: Percent, value: 25, periodSeconds: 60}]
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies: [{type: Percent, value: 100, periodSeconds: 60}, {type: Pods, value: 4, periodSeconds: 60}]
+      selectPolicy: Max
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ .Values.api.autoscaling.cpuUtilization }}}
+    - type: Resource
+      resource:
+        name: memory
+        target: {type: Utilization, averageUtilization: {{ .Values.api.autoscaling.memoryUtilization }}}
+{{- end }}

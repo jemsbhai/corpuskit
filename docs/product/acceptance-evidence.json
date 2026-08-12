@@ -1,0 +1,692 @@
+{
+  "schema_version": 1,
+  "description": "Executable evidence for every stable acceptance-test ID in the CorpusKit capability matrix. 'acceptance' means the checked-in automated evidence covers the declared local acceptance contract; 'partial' records implementation evidence while preserving the exact outstanding qualification gap.",
+  "entries": [
+    {
+      "requirement_id": "CK-OPS-001",
+      "acceptance_test_id": "AT-OPS-001-version-compatibility",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_corpusgen_adapter_smoke.py", "symbol": "test_real_capability_probe_reports_pinned_core_espeak_and_phoible"},
+        {"path": "tests/unit/test_corpusgen_probe.py", "symbol": "test_core_probe_accepts_exact_importable_contract"}
+      ]
+    },
+    {
+      "requirement_id": "CK-OPS-002",
+      "acceptance_test_id": "AT-OPS-002-capability-health-matrix",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_corpusgen_adapter_smoke.py", "symbol": "test_real_capability_probe_reports_pinned_core_espeak_and_phoible"},
+        {"path": "tests/unit/test_corpusgen_probe.py", "symbol": "test_report_marks_requirements_and_caches_results"},
+        {"path": "tests/unit/test_corpusgen_probe.py", "symbol": "test_espeak_probe_runs_real_contract_through_fake_backend"},
+        {"path": "tests/unit/test_corpusgen_probe.py", "symbol": "test_phoible_probe_distinguishes_missing_corrupt_and_valid_data"}
+      ]
+    },
+    {
+      "requirement_id": "CK-OPS-003",
+      "acceptance_test_id": "AT-OPS-003-optional-profile-detection",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_probe.py", "symbol": "test_optional_extra_probe_reports_exact_missing_modules"}
+      ]
+    },
+    {
+      "requirement_id": "CK-OPS-004",
+      "acceptance_test_id": "AT-OPS-004-durable-job-lifecycle",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_job_api.py", "symbol": "test_job_submission_replay_get_list_events_cancel_and_retry_contracts"},
+        {"path": "tests/integration/test_temporal_runtime.py", "symbol": "test_real_temporal_executes_once_and_history_excludes_persisted_text"},
+        {"path": "tests/integration/test_temporal_runtime.py", "symbol": "test_real_temporal_cancellation_signal_stops_commit_and_reaches_cancelled"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-001",
+      "acceptance_test_id": "AT-INV-001-phoible-atomic-download",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_phoible_provisioning.py", "symbol": "test_provision_streams_verifies_and_atomically_installs"},
+        {"path": "tests/unit/test_phoible_provisioning.py", "symbol": "test_force_download_failure_preserves_valid_cache"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-002",
+      "acceptance_test_id": "AT-INV-002-phoible-load-statistics",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_inventory_adapter.py", "symbol": "test_explicit_load_is_idempotent_and_returns_statistics_without_a_query"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-003",
+      "acceptance_test_id": "AT-INV-003-language-search",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_exploration_analysis_api.py", "symbol": "test_inventory_listing_mapping_lookup_union_and_segment_filters"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-004",
+      "acceptance_test_id": "AT-INV-004-espeak-iso-roundtrip",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_inventory_adapter.py", "symbol": "test_mapping_inventory_source_all_union_and_feature_contracts"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-005",
+      "acceptance_test_id": "AT-INV-005-inventory-resolution",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_exploration_analysis_api.py", "symbol": "test_inventory_listing_mapping_lookup_union_and_segment_filters"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-006",
+      "acceptance_test_id": "AT-INV-006-all-inventories-comparison",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_inventory_adapter.py", "symbol": "test_mapping_inventory_source_all_union_and_feature_contracts"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-007",
+      "acceptance_test_id": "AT-INV-007-union-inventory",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_inventory_adapter.py", "symbol": "test_mapping_inventory_source_all_union_and_feature_contracts"},
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_language_mapping_inventory_and_union_smoke"}
+      ]
+    },
+    {
+      "requirement_id": "CK-INV-008",
+      "acceptance_test_id": "AT-INV-008-segment-feature-explorer",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_inventory_adapter.py", "symbol": "test_mapping_inventory_source_all_union_and_feature_contracts"},
+        {"path": "tests/unit/test_exploration_analysis_api.py", "symbol": "test_inventory_listing_mapping_lookup_union_and_segment_filters"}
+      ]
+    },
+    {
+      "requirement_id": "CK-G2P-001",
+      "acceptance_test_id": "AT-G2P-001-real-espeak-single",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_corpusgen_adapter_smoke.py", "symbol": "test_installed_wheel_real_espeak_smoke"},
+        {"path": "tests/integration/test_corpusgen_adapter_smoke.py", "symbol": "test_real_espeak_through_application_and_http_boundaries"}
+      ]
+    },
+    {
+      "requirement_id": "CK-G2P-002",
+      "acceptance_test_id": "AT-G2P-002-batch-order-and-empty-inputs",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpus_workflow_service.py", "symbol": "test_workflows_delegate_valid_bounded_inputs_and_preserve_blank_g2p"},
+        {"path": "tests/unit/test_workflow_api.py", "symbol": "test_g2p_single_and_batch_http_contracts"}
+      ]
+    },
+    {
+      "requirement_id": "CK-G2P-003",
+      "acceptance_test_id": "AT-G2P-003-ngram-derivation",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_adapter.py", "symbol": "test_single_and_batch_g2p_are_normalized_and_immutable"}
+      ]
+    },
+    {
+      "requirement_id": "CK-G2P-004",
+      "acceptance_test_id": "AT-G2P-004-variants-and-language-list",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_g2p_languages_and_variants_are_normalized_deterministically"}
+      ]
+    },
+    {
+      "requirement_id": "CK-COV-001",
+      "acceptance_test_id": "AT-COV-001-three-unit-target-spaces",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_coverage_weighting_lab_service.py", "symbol": "test_target_space_estimates_all_units"},
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_real_tracker_updates_counts_provenance_priority_and_reset"}
+      ]
+    },
+    {
+      "requirement_id": "CK-COV-002",
+      "acceptance_test_id": "AT-COV-002-update-reset-invariants",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_real_tracker_updates_counts_provenance_priority_and_reset"}
+      ]
+    },
+    {
+      "requirement_id": "CK-COV-003",
+      "acceptance_test_id": "AT-COV-003-counts-and-provenance",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_real_tracker_updates_counts_provenance_priority_and_reset"}
+      ]
+    },
+    {
+      "requirement_id": "CK-COV-004",
+      "acceptance_test_id": "AT-COV-004-weighted-target-priority",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_real_tracker_updates_counts_provenance_priority_and_reset"},
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_weight_priority_is_descending_then_lexicographic"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-001",
+      "acceptance_test_id": "AT-EVAL-001-explicit-target",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_adapter.py", "symbol": "test_evaluation_target_modes_and_units_are_forwarded_and_normalized"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-002",
+      "acceptance_test_id": "AT-EVAL-002-derived-target-discovery",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_adapter.py", "symbol": "test_evaluation_target_modes_and_units_are_forwarded_and_normalized"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-003",
+      "acceptance_test_id": "AT-EVAL-003-phoible-target",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_phoible_exploration_smoke.py", "symbol": "test_cached_phoible_target_evaluation_uses_real_espeak_and_inventory"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-004",
+      "acceptance_test_id": "AT-EVAL-004-report-state-invariants",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_adapter.py", "symbol": "test_evaluation_target_modes_and_units_are_forwarded_and_normalized"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-005",
+      "acceptance_test_id": "AT-EVAL-005-three-report-views",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_all_report_verbosity_values_are_forwarded"},
+        {"path": "tests/integration/test_coverage_weighting_lab_smoke.py", "symbol": "test_real_installed_engine_g2p_report_views_and_exports"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-006",
+      "acceptance_test_id": "AT-EVAL-006-json-jsonld-golden-contracts",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_report_render_and_export_forward_contract_and_canonicalize_json"},
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_json_export_media_type_indentation_and_contract_failure"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-007",
+      "acceptance_test_id": "AT-EVAL-007-hand-computed-distribution-metrics",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_analysis_adapter.py", "symbol": "test_distribution_metrics_match_hand_computed_golden_vector"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-008",
+      "acceptance_test_id": "AT-EVAL-008-text-quality-multiscript",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_analysis_adapter.py", "symbol": "test_text_quality_metrics_match_reference_statistics"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-009",
+      "acceptance_test_id": "AT-EVAL-009-wer-cer-per-ser-golden-vectors",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_analysis_adapter.py", "symbol": "test_error_rates_are_micro_averaged_and_infinity_is_explicitly_json_safe"},
+        {"path": "tests/unit/test_analysis_adapter.py", "symbol": "test_absent_phonemes_use_distinct_not_computed_status"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-010",
+      "acceptance_test_id": "AT-EVAL-010-perplexity-tiny-model",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_shared_fluency_and_perplexity"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_perplexity_preserves_scored_and_skipped_source_mapping"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-011",
+      "acceptance_test_id": "AT-EVAL-011-shared-model-identity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_shared_fluency_and_perplexity"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_fluency_and_perplexity_share_one_application_owned_bundle"}
+      ]
+    },
+    {
+      "requirement_id": "CK-EVAL-012",
+      "acceptance_test_id": "AT-EVAL-012-trajectory-cross-result-parity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_analysis_adapter.py", "symbol": "test_coverage_trajectory_golden_vectors_for_all_units"},
+        {"path": "tests/integration/test_trajectory_cross_result_parity.py", "symbol": "test_selection_result_reconstructs_the_same_ordered_coverage_trajectory"},
+        {"path": "tests/integration/test_trajectory_cross_result_parity.py", "symbol": "test_generation_result_reconstructs_the_same_ordered_coverage_trajectory"},
+        {"path": "tests/integration/test_selection_artifact_adoption.py", "symbol": "test_process_claim_parent_adoption_and_rehydration_preserve_trajectory"},
+        {"path": "tests/integration/test_selection_artifact_adoption.py", "symbol": "test_parent_rejects_digest_valid_selection_semantic_tampering"},
+        {"path": "tests/integration/test_selection_artifact_adoption.py", "symbol": "test_selection_crash_redelivery_and_cancellation_never_late_commit"}
+      ]
+    },
+    {
+      "requirement_id": "CK-WGT-001",
+      "acceptance_test_id": "AT-WGT-001-uniform-and-validation",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_weight_algorithms_match_golden_vectors_and_validate"},
+        {"path": "tests/unit/test_coverage_weighting_lab_service.py", "symbol": "test_weight_domain_enforces_strategy_and_finite_validation_contracts"}
+      ]
+    },
+    {
+      "requirement_id": "CK-WGT-002",
+      "acceptance_test_id": "AT-WGT-002-inverse-frequency-reference-case",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_weight_algorithms_match_golden_vectors_and_validate"}
+      ]
+    },
+    {
+      "requirement_id": "CK-WGT-003",
+      "acceptance_test_id": "AT-WGT-003-linguistic-class-weights",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_corpusgen_lab_adapter.py", "symbol": "test_weight_algorithms_match_golden_vectors_and_validate"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-001",
+      "acceptance_test_id": "AT-SEL-001-dispatch-and-result-contract",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_selection_adapter.py", "symbol": "test_all_selector_algorithms_use_the_public_dispatch_contract"},
+        {"path": "tests/unit/test_workflow_api.py", "symbol": "test_selection_exposes_every_algorithm"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-002",
+      "acceptance_test_id": "AT-SEL-002-greedy-golden-set-cover",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_greedy_golden_set_cover_and_celf_parity"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-003",
+      "acceptance_test_id": "AT-SEL-003-celf-greedy-parity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_greedy_golden_set_cover_and_celf_parity"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-004",
+      "acceptance_test_id": "AT-SEL-004-stochastic-seed-and-budget",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_stochastic_selector_seed_and_budget_are_reproducible"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-005",
+      "acceptance_test_id": "AT-SEL-005-distribution-kl-improvement",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_distribution_selector_improves_kl_for_a_skewed_target"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-006",
+      "acceptance_test_id": "AT-SEL-006-ilp-bruteforce-optimality",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_ilp_is_bruteforce_optimal"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-007",
+      "acceptance_test_id": "AT-SEL-007-nsga2-pareto-nondominance",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_nsga2_front_is_nondominated"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SEL-008",
+      "acceptance_test_id": "AT-SEL-008-six-algorithm-comparison",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_selector_algorithms_acceptance.py", "symbol": "test_all_six_algorithms_share_the_normalized_contract"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-001",
+      "acceptance_test_id": "AT-GEN-001-stopping-validation",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_generation_domain_service.py", "symbol": "test_stopping_criteria_requires_a_finite_safety_stop"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-002",
+      "acceptance_test_id": "AT-GEN-002-generation-state-machine",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_real_repository_loop_preserves_ids_and_prevents_duplicate_acceptance"},
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_generation_can_use_phonotactic_readability_score_and_filter"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-003",
+      "acceptance_test_id": "AT-GEN-003-progress-and-stop-reasons",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_generation_domain_service.py", "symbol": "test_durable_repository_handler_emits_sanitized_state_machine_progress"},
+        {"path": "tests/integration/test_temporal_activities.py", "symbol": "test_progress_is_queryable_before_completion_and_reconnects_in_order"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-004",
+      "acceptance_test_id": "AT-GEN-004-prephonemized-repository",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_real_repository_loop_preserves_ids_and_prevents_duplicate_acceptance"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-005",
+      "acceptance_test_id": "AT-GEN-005-raw-text-repository",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_raw_text_repository_runs_real_espeak_g2p"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-006",
+      "acceptance_test_id": "AT-GEN-006-huggingface-dataset-import",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_huggingface_repository_acceptance.py", "symbol": "test_real_immutable_huggingface_dataset_import"},
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_huggingface_binding_forces_remote_code_off"},
+        {"path": "tests/unit/test_generation_domain_service.py", "symbol": "test_huggingface_worker_policy_binds_every_selector_and_allows_only_lower_cap"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-007",
+      "acceptance_test_id": "AT-GEN-007-fake-provider-contract",
+      "evidence_level": "partial",
+      "gap": "Deterministic provider and real CorpusGen backend-construction tests pass. A manual protected workflow enforces the exact candidate, production worker image, provider/model namespace, hard spend/request/deadline ceilings, redaction, and credential-free offline validation. This source registry contains no external artifact; the release record must link retained passing evidence for the exact candidate.",
+      "references": [
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_real_corpusgen_hosted_backend_contract_with_fake_provider"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_hosted_failures_never_become_empty_success"},
+        {"path": "tests/provider/test_qualified_provider_acceptance.py", "symbol": "test_fake_provider_runs_through_public_adapter_and_writes_redacted_evidence"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-008",
+      "acceptance_test_id": "AT-GEN-008-llm-retry-rate-and-redaction",
+      "evidence_level": "partial",
+      "gap": "Retry, request pacing, budget, prompt-secret, redaction, and the protected canary evidence contracts pass locally; a credentialed exact-candidate run, provider invoice correctness, and crash-after-provider-success redelivery behavior remain unqualified.",
+      "references": [
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_hosted_generation_retries_with_counted_budget_and_redacted_manifest"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_hosted_custom_prompt_digest_and_generated_ids_are_stable"},
+        {"path": "tests/integration/test_jobs.py", "symbol": "test_advanced_admission_rejects_before_queue_and_preserves_idempotent_replay"},
+        {"path": "tests/provider/test_qualified_provider_acceptance.py", "symbol": "test_workflow_checks_exact_sha_and_hardens_live_and_offline_boundaries"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-009",
+      "acceptance_test_id": "AT-GEN-009-local-tiny-model-cpu",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_offline_local_generation"}
+      ]
+    },
+    {
+      "requirement_id": "CK-GEN-010",
+      "acceptance_test_id": "AT-GEN-010-quantized-gpu-smoke",
+      "evidence_level": "partial",
+      "gap": "Exact policy, queue and offline quantization paths are tested. The qualified baseline fail-closes unless real 4-bit and 8-bit bitsandbytes modules load on CUDA and both complete target-covering generation with matching manifests. This source registry contains no external artifact; the release record must link retained evidence for the exact candidate SHA.",
+      "references": [
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_local_gpu_quantization_requires_exact_policy_and_profile"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_transformers_quantization_paths_remain_offline_and_safetensors_only"},
+        {"path": "tests/gpu/test_qualified_runtime_contract.py", "symbol": "test_complete_quantized_generation_evidence_is_accepted"},
+        {"path": "tests/gpu/test_qualified_runtime_contract.py", "symbol": "test_quantized_generation_evidence_rejects_incomplete_proofs"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SCR-001",
+      "acceptance_test_id": "AT-SCR-001-composite-score-golden-vector",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_composite_golden_vector_and_preview_are_non_mutating"},
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_atomic_commit_matches_preview_and_returns_next_immutable_state"},
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_composite_fluency_is_injected_worker_only_and_changes_ranking"},
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_shared_fluency_and_perplexity"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SCR-002",
+      "acceptance_test_id": "AT-SCR-002-ngram-ranking",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_ngram_constraint_roundtrip_golden_scores"},
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_ngram_constraint_can_train_from_raw_text_with_real_espeak"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SCR-003",
+      "acceptance_test_id": "AT-SCR-003-phonotactic-roundtrip",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_ngram_scorer_artifact_roundtrip_and_golden_scores"},
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_ngram_constraint_roundtrip_golden_scores"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SCR-004",
+      "acceptance_test_id": "AT-SCR-004-fluency-score-and-sharing",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_shared_fluency_and_perplexity"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_fluency_and_perplexity_share_one_application_owned_bundle"},
+        {"path": "tests/unit/test_model_runtime_adapter.py", "symbol": "test_local_generation_loads_fluency_only_when_weighted_and_fails_closed"}
+      ]
+    },
+    {
+      "requirement_id": "CK-SCR-005",
+      "acceptance_test_id": "AT-SCR-005-readability-score-and-filter",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_scoring_adapter.py", "symbol": "test_readability_filter_rejection_and_target_range_validation"},
+        {"path": "tests/unit/test_generation_adapter.py", "symbol": "test_generation_can_use_phonotactic_readability_score_and_filter"}
+      ]
+    },
+    {
+      "requirement_id": "CK-DATG-001",
+      "acceptance_test_id": "AT-DATG-001-real-tokenizer-index",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_datg_adapter.py", "symbol": "test_real_espeak_attribute_index_acceptance"},
+        {"path": "tests/integration/test_datg_publication.py", "symbol": "test_parent_publication_closes_build_catalog_inspect_and_generation_loop"},
+        {"path": "tests/integration/test_datg_publication.py", "symbol": "test_real_offline_transformers_index_publish_inspect_and_logit_preview"}
+      ]
+    },
+    {
+      "requirement_id": "CK-DATG-002",
+      "acceptance_test_id": "AT-DATG-002-attribute-token-lookup",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_datg_domain_service_api.py", "symbol": "test_inspection_matches_upstream_target_covered_and_strict_frequency_semantics"},
+        {"path": "tests/unit/test_datg_adapter.py", "symbol": "test_public_datg_strategy_has_hand_computed_exact_deltas_and_clones"},
+        {"path": "tests/integration/test_datg_publication.py", "symbol": "test_parent_publication_closes_build_catalog_inspect_and_generation_loop"}
+      ]
+    },
+    {
+      "requirement_id": "CK-DATG-003",
+      "acceptance_test_id": "AT-DATG-003-exact-logit-deltas-and-generation",
+      "evidence_level": "partial",
+      "gap": "All unit levels and anti-target modes have exact delta tests, and the authorized browser/API visualization proves bounded before/delta/after values without model execution; guided generation still lacks clean exact-SHA qualified CUDA/model evidence.",
+      "references": [
+        {"path": "tests/unit/test_datg_adapter.py", "symbol": "test_public_datg_strategy_has_hand_computed_exact_deltas_and_clones"},
+        {"path": "tests/unit/test_datg_adapter.py", "symbol": "test_default_generation_binding_uses_public_upstream_contract_and_safe_loader_kwargs"},
+        {"path": "tests/unit/test_datg_domain_service_api.py", "symbol": "test_lab_http_has_no_execution_route_or_network"},
+        {"path": "apps/web/src/components/advanced-workbench.test.tsx", "symbol": "visualizes exact DATG before, delta, after, and token classifications"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-001",
+      "acceptance_test_id": "AT-RL-001-reward-peek-commit-atomicity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_sentence_reward_peek_commit_normalization_and_atomic_state"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-002",
+      "acceptance_test_id": "AT-RL-002-word-boundary-token-rewards",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_real_espeak_token_reward_boundaries"},
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_token_missing_units_rewarded_exactly_once_and_hierarchical_is_peek"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-003",
+      "acceptance_test_id": "AT-RL-003-hierarchical-reward",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_token_missing_units_rewarded_exactly_once_and_hierarchical_is_peek"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-004",
+      "acceptance_test_id": "AT-RL-004-hand-computed-ppo-tensors",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_ppo_public_primitives_match_hand_computed_goldens_and_masks"},
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_value_head_real_torch_is_seeded_cpu_and_supports_both_ranks"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-005",
+      "acceptance_test_id": "AT-RL-005-tiny-model-short-training",
+      "evidence_level": "partial",
+      "gap": "Static and dynamic prompt paths and the trainer contract pass with deterministic test models; a clean exact-SHA real tiny-model two-step CUDA run remains outstanding.",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_real_upstream_trainer_handles_variable_eos_pad_and_atomic_batch_g2p"},
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_fake_full_training_static_artifact_stages_safe_checkpoint_and_manifest"},
+        {"path": "tests/integration/test_phon_rl_trusted_inputs.py", "symbol": "test_static_prompts_are_parent_authorized_one_use_and_never_enter_run_history"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-006",
+      "acceptance_test_id": "AT-RL-006-progress-checkpoint-roundtrip",
+      "evidence_level": "partial",
+      "gap": "Durable progress, integrity checks, adoption and cancellation pass locally; an exact-SHA live immutable-model checkpoint reload on the qualified GPU profile is not attached.",
+      "references": [
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_checkpoint_file_integrity_roundtrip_and_tamper_rejection"},
+        {"path": "tests/integration/test_temporal_activities.py", "symbol": "test_progress_is_queryable_before_completion_and_reconnects_in_order"},
+        {"path": "tests/integration/test_phon_rl_process_runner.py", "symbol": "test_outer_runner_termination_kills_training_and_prevents_late_staging"}
+      ]
+    },
+    {
+      "requirement_id": "CK-RL-007",
+      "acceptance_test_id": "AT-RL-007-peft-adapter-generation",
+      "evidence_level": "partial",
+      "gap": "A real two-step offline CPU CorpusKit handler chain carries trainer-produced PEFT safetensors through parent adoption, authorized read-only materialization, safe merge, generation and second adoption. The qualified harness enforces a fail-closed two-phase boundary for one exact candidate SHA: the exact Linux training image leaves only ephemeral mounted SQLite/object-store state plus an HMAC-bound receipt, and the exact inference image authenticates and revalidates it before materialization, generation and second adoption; Windows executes the same roles under one exact lock profile. This source registry contains no external artifact; the release record must link retained passing schema-v3 evidence for the exact candidate.",
+      "references": [
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_trainer_peft_output_crosses_adoption_and_trusted_generation_chain"},
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_offline_peft_adapter_is_merged_and_generates_via_public_loop"},
+        {"path": "tests/integration/test_phon_rl_trusted_inputs.py", "symbol": "test_peft_result_is_bound_to_successful_training_run_and_materialized_read_only"},
+        {"path": "tests/unit/test_phon_rl_adapter.py", "symbol": "test_dynamic_peft_training_manifest_and_application_inference_contract"},
+        {"path": "tests/gpu/test_qualified_runtime_contract.py", "symbol": "test_peft_chain_evidence_rejects_missing_or_inconsistent_proofs"}
+      ]
+    },
+    {
+      "requirement_id": "CK-CLI-001",
+      "acceptance_test_id": "AT-CLI-001-inventory-parity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_cli_parity_acceptance.py", "symbol": "test_inventory_preview_executes_with_json_matching_adapter_contract"}
+      ]
+    },
+    {
+      "requirement_id": "CK-CLI-002",
+      "acceptance_test_id": "AT-CLI-002-evaluate-parity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_cli_parity_acceptance.py", "symbol": "test_evaluation_preview_executes_with_json_matching_adapter_contract"}
+      ]
+    },
+    {
+      "requirement_id": "CK-CLI-003",
+      "acceptance_test_id": "AT-CLI-003-select-parity",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_cli_parity_acceptance.py", "symbol": "test_selection_preview_executes_with_json_matching_adapter_contract"}
+      ]
+    },
+    {
+      "requirement_id": "CK-CLI-004",
+      "acceptance_test_id": "AT-CLI-004-generate-parity-all-backends",
+      "evidence_level": "partial",
+      "gap": "Repository, deterministic hosted, and exact-pin offline CPU-local generation match normalized real CLI behavior. Live-provider, qualified CUDA 4/8-bit, DATG, Phon-RL, readability, and remaining scorer parity are still outstanding.",
+      "references": [
+        {"path": "tests/integration/test_cli_parity_acceptance.py", "symbol": "test_repository_generation_preview_is_accepted_by_real_cli"},
+        {"path": "tests/integration/test_cli_parity_acceptance.py", "symbol": "test_hosted_generation_preview_executes_with_fake_provider_matching_adapter_contract"},
+        {"path": "tests/integration/test_real_tiny_model_runtime.py", "symbol": "test_real_offline_cpu_local_cli_shared_result_semantics_match_pinned_adapter"},
+        {"path": "tests/unit/test_cli_parity.py", "symbol": "test_generation_preview_covers_repository_guidance_scoring_and_safety_stops"},
+        {"path": "tests/unit/test_cli_parity.py", "symbol": "test_dataset_and_llm_generation_previews_disclose_external_reproducibility"}
+      ]
+    },
+    {
+      "requirement_id": "CK-REP-001",
+      "acceptance_test_id": "AT-REP-001-manifest-schema-and-replay",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_reproducibility.py", "symbol": "test_authoritative_manifest_is_canonical_idempotent_and_audited"},
+        {"path": "tests/integration/test_reproducibility.py", "symbol": "test_manifest_binds_verified_corpus_input_and_output_artifacts"},
+        {"path": "tests/integration/test_postgres_reproducibility.py", "symbol": "test_worker_reads_and_adoption_role_atomically_publishes_staged_result"},
+        {"path": "tests/integration/test_combined_reproducibility_runtime.py", "symbol": "test_seeded_selection_manifest_replay_crosses_postgres_temporal_and_private_minio"}
+      ]
+    },
+    {
+      "requirement_id": "CK-REP-002",
+      "acceptance_test_id": "AT-REP-002-seeded-replay",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_reproducibility.py", "symbol": "test_exact_replay_redelivery_converges_and_compares_atomically"},
+        {"path": "tests/integration/test_reproducibility.py", "symbol": "test_replay_discloses_best_effort_and_nonreproducible_results"},
+        {"path": "tests/integration/test_postgres_reproducibility.py", "symbol": "test_split_roles_construct_and_replay_without_rls_bypass"},
+        {"path": "tests/integration/test_combined_reproducibility_runtime.py", "symbol": "test_seeded_selection_manifest_replay_crosses_postgres_temporal_and_private_minio"}
+      ]
+    },
+    {
+      "requirement_id": "CK-REP-003",
+      "acceptance_test_id": "AT-REP-003-multilingual-demo-suite",
+      "evidence_level": "acceptance",
+      "references": [
+        {"path": "tests/integration/test_multilingual_demo_acceptance.py", "symbol": "test_curated_suite_exercises_five_writing_system_and_inventory_cases"},
+        {"path": "tests/unit/test_multilingual_demo.py", "symbol": "test_one_case_failure_is_sanitized_and_does_not_abort_suite"}
+      ]
+    }
+  ]
+}

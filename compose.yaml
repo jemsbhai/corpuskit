@@ -1,0 +1,655 @@
+name: corpuskit
+
+services:
+  postgres:
+    image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: corpuskit
+      POSTGRES_USER: corpuskit
+      POSTGRES_PASSWORD: ${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}
+    ports:
+      - "127.0.0.1:${CORPUSKIT_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corpuskit -d corpuskit"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      MINIO_ROOT_PASSWORD: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+    ports:
+      - "127.0.0.1:${CORPUSKIT_MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${CORPUSKIT_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+      - backend
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    restart: "no"
+    read_only: true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
+        mc mb --ignore-existing "local/$${MINIO_BUCKET}";
+        mc anonymous set none "local/$${MINIO_BUCKET}"
+    environment:
+      MC_CONFIG_DIR: /tmp/.mc
+      MINIO_ROOT_USER: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      MINIO_ROOT_PASSWORD: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      MINIO_BUCKET: corpuskit-artifacts
+    depends_on:
+      minio:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  api:
+    image: corpuskit-api:${CORPUSKIT_API_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: api
+      CORPUSKIT_API_BIND_HOST: 0.0.0.0
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_METRICS_ENABLED: "true"
+      CORPUSKIT_API_RATE_LIMIT_ENABLED: "true"
+      CORPUSKIT_API_RATE_LIMIT_WINDOW_SECONDS: "60"
+      CORPUSKIT_API_RATE_LIMIT_READ_REQUESTS: "600"
+      CORPUSKIT_API_RATE_LIMIT_WRITE_REQUESTS: "120"
+      CORPUSKIT_API_RATE_LIMIT_RETENTION_WINDOWS: "3"
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+      CORPUSKIT_ALLOWED_ORIGINS: '["http://localhost:3000"]'
+      CORPUSKIT_JOB_BACKEND: ${CORPUSKIT_JOB_BACKEND:-inline}
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_REQUIRED_CAPABILITIES: '["corpusgen-core","phoible"]'
+      CORPUSKIT_WORKER_HOSTED_MODEL_POLICIES: "${CORPUSKIT_WORKER_HOSTED_MODEL_POLICIES:-[]}"
+      CORPUSKIT_WORKER_HUGGINGFACE_REPOSITORY_POLICIES: "${CORPUSKIT_WORKER_HUGGINGFACE_REPOSITORY_POLICIES:-[]}"
+      CORPUSKIT_WORKER_LOCAL_MODEL_POLICIES: "${CORPUSKIT_WORKER_LOCAL_MODEL_POLICIES:-[]}"
+      CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES: "${CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES:-[]}"
+      CORPUSKIT_WORKER_PHON_RL_RUNTIME_POLICIES: "${CORPUSKIT_WORKER_PHON_RL_RUNTIME_POLICIES:-[]}"
+      CORPUSKIT_WORKER_DATG_INDEX_CACHE_ROOT: /datg-indexes
+      CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY: "true"
+      # phonemizer isolates libespeak by copying and loading it from tempfile.
+      # Keep general /tmp noexec and scope that requirement to this bounded mount.
+      TMPDIR: /run/corpuskit-espeak
+      XDG_CONFIG_HOME: /tmp/corpuskit-xdg
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${CORPUSKIT_API_PORT:-8000}:8000"
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+      - corpusgen-data:/home/corpuskit/.corpusgen:ro
+      - type: bind
+        source: ${CORPUSKIT_DATG_INDEX_CACHE_ROOT:-./data/datg-index-cache}
+        target: /datg-indexes
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - edge
+      - backend
+
+  migrate:
+    image: corpuskit-api:${CORPUSKIT_API_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: "no"
+    read_only: true
+    entrypoint: ["corpuskit-db"]
+    command: ["upgrade"]
+    environment:
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  provision-phoible:
+    image: corpuskit-api:${CORPUSKIT_API_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: "no"
+    read_only: true
+    entrypoint: ["corpuskit-phoible"]
+    command: ["provision", "--json"]
+    volumes:
+      - corpusgen-data:/home/corpuskit/.corpusgen
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - provisioning
+
+  # One bounded maintenance batch. Production schedules this image with a
+  # dedicated non-owner database login and concurrencyPolicy=Forbid.
+  maintenance:
+    profiles: [maintenance]
+    image: corpuskit-api:${CORPUSKIT_API_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: "no"
+    init: true
+    read_only: true
+    entrypoint: ["corpuskit-maintenance"]
+    command:
+      - run-once
+      - --limit
+      - "500"
+      - --max-reconciliation-pages
+      - "10"
+      - --max-staging-pages
+      - "10"
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: maintenance
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_API_RATE_LIMIT_WINDOW_SECONDS: "60"
+      CORPUSKIT_API_RATE_LIMIT_READ_REQUESTS: "600"
+      CORPUSKIT_API_RATE_LIMIT_WRITE_REQUESTS: "120"
+      CORPUSKIT_API_RATE_LIMIT_RETENTION_WINDOWS: "3"
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  # The web service is optional in the infrastructure-only default stack. Enable it
+  # explicitly with: docker compose --profile web up --build.
+  web:
+    profiles: [web]
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      CORPUSKIT_API_INTERNAL_URL: http://api:8000/api/v1
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_WEB_AUTH_MODE: demo
+      # Deterministic defaults are for the isolated local demo only. Shared
+      # deployments must override both values with independently generated keys.
+      CORPUSKIT_WEB_STATE_SECRET: ${CORPUSKIT_WEB_STATE_SECRET:-AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE}
+      CORPUSKIT_WEB_SESSION_ENCRYPTION_KEYS: '${CORPUSKIT_WEB_SESSION_ENCRYPTION_KEYS:-["AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"]}'
+      CORPUSKIT_WEB_ALLOWED_RETURN_PATHS: '["/","/projects","/evaluate","/analysis","/capabilities","/g2p","/inventory","/coverage","/selection","/generation","/advanced","/jobs","/artifacts"]'
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CORPUSKIT_WEB_PORT:-3000}:3000"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+
+  temporal:
+    profiles: [durable]
+    image: temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e
+    restart: unless-stopped
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --db-filename
+      - /home/temporal/temporal.db
+    ports:
+      - "127.0.0.1:${CORPUSKIT_TEMPORAL_PORT:-7233}:7233"
+      - "127.0.0.1:${CORPUSKIT_TEMPORAL_UI_PORT:-8233}:8233"
+    volumes:
+      - temporal-data:/home/temporal
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "temporal",
+          "operator",
+          "cluster",
+          "health",
+          "--address",
+          "127.0.0.1:7233",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      - edge
+      - backend
+
+  dispatcher:
+    profiles: [durable]
+    image: corpuskit-api:${CORPUSKIT_API_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    entrypoint: ["corpuskit-dispatcher"]
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: dispatcher
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_JOB_BACKEND: temporal
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_TEMPORAL_TASK_QUEUE: batch-cpu
+      CORPUSKIT_WORKER_PROFILE: batch-cpu
+      CORPUSKIT_DISPATCHER_ID: corpuskit-local-dispatcher
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  worker-batch:
+    profiles: [durable]
+    image: corpuskit-worker-batch:${CORPUSKIT_WORKER_BATCH_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: worker-batch
+    restart: unless-stopped
+    init: true
+    read_only: true
+    entrypoint: ["corpuskit-worker"]
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: worker
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ADOPTION_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_JOB_BACKEND: temporal
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_TEMPORAL_TASK_QUEUE: batch-cpu
+      CORPUSKIT_WORKER_PROFILE: batch-cpu
+      CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS: ${CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS:-300}
+      CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES: "${CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES:-[]}"
+      CORPUSKIT_WORKER_DATG_MODEL_CACHE_ROOT: /models
+      CORPUSKIT_WORKER_DATG_INDEX_PUBLISH_ROOT: /datg-index-publish
+      CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY: "true"
+      TMPDIR: /run/corpuskit-espeak
+      XDG_CONFIG_HOME: /tmp/corpuskit-xdg
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_MAX_BYTES: ${CORPUSKIT_ARTIFACT_MAX_BYTES:-37748736}
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+      - corpusgen-data:/home/corpuskit/.corpusgen:ro
+      - type: bind
+        source: ${CORPUSKIT_MODEL_CACHE_ROOT:-./data/model-cache}
+        target: /models
+        read_only: true
+      - type: bind
+        source: ${CORPUSKIT_DATG_INDEX_CACHE_ROOT:-./data/datg-index-cache}
+        target: /datg-index-publish
+        read_only: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  # Hosted generation and allowlisted Hugging Face repository imports share the
+  # only worker egress profile. Hosted requests contain a public connection_id;
+  # its allowlisted secret://env reference is injected only into this worker.
+  worker-external-provider:
+    profiles: [hosted]
+    image: corpuskit-worker-external-provider:${CORPUSKIT_WORKER_EXTERNAL_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: worker-external-provider
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: worker
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ADOPTION_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_JOB_BACKEND: temporal
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_TEMPORAL_TASK_QUEUE: external-provider
+      CORPUSKIT_WORKER_PROFILE: external-provider
+      CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS: ${CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS:-300}
+      CORPUSKIT_WORKER_HOSTED_MODEL_POLICIES: "${CORPUSKIT_WORKER_HOSTED_MODEL_POLICIES:-[]}"
+      CORPUSKIT_WORKER_HUGGINGFACE_REPOSITORY_POLICIES: "${CORPUSKIT_WORKER_HUGGINGFACE_REPOSITORY_POLICIES:-[]}"
+      CORPUSKIT_PROVIDER_API_KEY: ${CORPUSKIT_PROVIDER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+      TMPDIR: /run/corpuskit-espeak
+      XDG_CONFIG_HOME: /tmp/corpuskit-xdg
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+      - corpusgen-data:/home/corpuskit/.corpusgen:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+      - /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+      - provider-egress
+
+  worker-gpu-inference:
+    profiles: [gpu-inference]
+    image: corpuskit-worker-gpu-inference:${CORPUSKIT_WORKER_GPU_INFERENCE_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: worker-gpu-inference
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: worker
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ADOPTION_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_JOB_BACKEND: temporal
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_TEMPORAL_TASK_QUEUE: gpu-inference
+      CORPUSKIT_WORKER_PROFILE: gpu-inference
+      CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS: ${CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS:-900}
+      CORPUSKIT_WORKER_LOCAL_MODEL_POLICIES: "${CORPUSKIT_WORKER_LOCAL_MODEL_POLICIES:-[]}"
+      CORPUSKIT_WORKER_MODEL_CACHE_ROOT: /models
+      CORPUSKIT_WORKER_MODEL_CACHE_MOUNT_READ_ONLY: "true"
+      CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES: "${CORPUSKIT_WORKER_DATG_RUNTIME_POLICIES:-[]}"
+      CORPUSKIT_WORKER_DATG_MODEL_CACHE_ROOT: /models
+      CORPUSKIT_WORKER_DATG_INDEX_CACHE_ROOT: /datg-indexes
+      CORPUSKIT_WORKER_DATG_CACHE_MOUNT_READ_ONLY: "true"
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_MAX_BYTES: ${CORPUSKIT_GPU_ARTIFACT_MAX_BYTES:-37748736}
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+      TMPDIR: /run/corpuskit-espeak
+      XDG_CONFIG_HOME: /tmp/corpuskit-xdg
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+      - corpusgen-data:/home/corpuskit/.corpusgen:ro
+      - type: bind
+        source: ${CORPUSKIT_MODEL_CACHE_ROOT:-./data/model-cache}
+        target: /models
+        read_only: true
+      - type: bind
+        source: ${CORPUSKIT_DATG_INDEX_CACHE_ROOT:-./data/datg-index-cache}
+        target: /datg-indexes
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1g
+      - /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    networks:
+      - backend
+
+  worker-gpu-training:
+    profiles: [gpu-training]
+    image: corpuskit-worker-gpu-training:${CORPUSKIT_WORKER_GPU_TRAINING_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: worker-gpu-training
+    restart: unless-stopped
+    init: true
+    read_only: true
+    environment:
+      CORPUSKIT_ENVIRONMENT: development
+      CORPUSKIT_RUNTIME_ROLE: worker
+      CORPUSKIT_AUTH_MODE: demo
+      CORPUSKIT_LOG_LEVEL: ${CORPUSKIT_LOG_LEVEL:-INFO}
+      CORPUSKIT_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_ADOPTION_DATABASE_URL: postgresql+asyncpg://corpuskit:${CORPUSKIT_POSTGRES_PASSWORD:-corpuskit-local-only}@postgres:5432/corpuskit
+      CORPUSKIT_JOB_BACKEND: temporal
+      CORPUSKIT_TEMPORAL_ADDRESS: temporal:7233
+      CORPUSKIT_TEMPORAL_NAMESPACE: default
+      CORPUSKIT_TEMPORAL_TASK_QUEUE: gpu-training
+      CORPUSKIT_WORKER_PROFILE: gpu-training
+      CORPUSKIT_WORKER_ACTIVITY_DEADLINE_CAP_SECONDS: ${CORPUSKIT_RL_ACTIVITY_DEADLINE_CAP_SECONDS:-86400}
+      CORPUSKIT_WORKER_PHON_RL_RUNTIME_POLICIES: "${CORPUSKIT_WORKER_PHON_RL_RUNTIME_POLICIES:-[]}"
+      CORPUSKIT_WORKER_PHON_RL_CACHE_ROOTS: '{"models-ro":"/models"}'
+      CORPUSKIT_ARTIFACT_ROOT: /app/artifacts
+      CORPUSKIT_ARTIFACT_BACKEND: s3
+      CORPUSKIT_ARTIFACT_MAX_BYTES: "104857600"
+      CORPUSKIT_ARTIFACT_S3_ENDPOINT: http://minio:9000
+      CORPUSKIT_ARTIFACT_S3_BUCKET: corpuskit-artifacts
+      CORPUSKIT_ARTIFACT_S3_REGION: us-east-1
+      CORPUSKIT_ARTIFACT_S3_ACCESS_KEY_ID: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
+      CORPUSKIT_ARTIFACT_S3_SECRET_ACCESS_KEY: ${CORPUSKIT_MINIO_ROOT_PASSWORD:-corpuskit-local-secret}
+      CORPUSKIT_ARTIFACT_S3_PATH_STYLE: "true"
+      TMPDIR: /run/corpuskit-espeak
+      XDG_CONFIG_HOME: /tmp/corpuskit-xdg
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      provision-phoible:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_healthy
+    volumes:
+      - corpuskit-artifacts:/app/artifacts
+      - corpusgen-data:/home/corpuskit/.corpusgen:ro
+      - type: bind
+        source: ${CORPUSKIT_RL_MODEL_CACHE_ROOT:-./data/rl-model-cache}
+        target: /models
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=2g
+      - /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    networks:
+      - backend
+
+networks:
+  edge:
+  provider-egress:
+  provisioning:
+  backend:
+    internal: true
+
+volumes:
+  corpusgen-data:
+  corpuskit-artifacts:
+  postgres-data:
+  minio-data:
+  temporal-data:

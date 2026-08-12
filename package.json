@@ -1,0 +1,35 @@
+{
+  "name": "corpuskit",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "description": "Production corpus-design workbench powered by CorpusGen",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24.18.1 <25"
+  },
+  "workspaces": [
+    "apps/web"
+  ],
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.2": false,
+    "fsevents@2.3.3": false,
+    "unrs-resolver@1.12.2": true
+  },
+  "scripts": {
+    "build": "npm run build --workspace @corpuskit/web",
+    "dev": "npm run dev --workspace @corpuskit/web",
+    "format:check": "npm run format:check --workspace @corpuskit/web",
+    "lint": "npm run lint --workspace @corpuskit/web --",
+    "test": "npm run test --workspace @corpuskit/web --",
+    "test:auth": "npm run test:auth --workspace @corpuskit/web --",
+    "test:e2e": "npm run test:e2e --workspace @corpuskit/web --",
+    "test:workbenches": "npm run test:workbenches --workspace @corpuskit/web --",
+    "typecheck": "npm run typecheck --workspace @corpuskit/web"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.10",
+    "jsdom": "^26.1.0",
+    "vitest": "^4.1.10"
+  }
+}

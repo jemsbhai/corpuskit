@@ -1,0 +1,92 @@
+# CorpusKit qualified isolated GPU profile v1
+# platform=windows-x64
+# python=3.12.12
+# torch-wheel-content-length=1917946849
+# torch-wheel-etag=aae695147d9f3c9a62f5d4e684569b73-229
+# torch-wheel-sha256=0bcf7ae00b2e20ef2b53af2e764a4fd8646b913bfaaeba2b9c975e672e8c7902
+# torch-wheel-record-sha256=f8b0f86cacb13585da12fec801316550b82f45863b80117de148593c9f02d8d1
+# torch-record-canonical-sha256=bcca40a4130fe52ab0acdbdd96498217d6acb7f3a948455fd4172df401ca7907
+# Provision into a dedicated virtual environment with:
+# uv pip sync --python <python.exe> scripts/gpu/windows-cu132-v1.lock.txt
+# uv pip install --python <python.exe> --no-deps .
+accelerate==1.14.0
+aiosqlite==0.22.1
+alembic==1.19.1
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+asyncpg==0.31.0
+attrs==26.1.0
+bitsandbytes==0.50.0
+boto3==1.43.69
+botocore==1.43.69
+certifi==2026.7.22
+cffi==2.1.1
+click==8.4.2
+colorama==0.4.6
+corpusgen==0.1.7
+cryptography==50.0.0
+dlinfo==2.0.0
+fastapi==0.141.1
+filelock==3.29.0
+fsspec==2026.4.0
+greenlet==3.5.5
+h11==0.16.0
+hf-xet==1.6.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1
+huggingface-hub==1.27.0
+idna==3.18
+jinja2==3.1.6
+jmespath==1.1.0
+joblib==1.5.3
+mako==1.4.1
+markdown-it-py==4.2.0
+markupsafe==3.0.3
+mdurl==0.1.2
+mpmath==1.3.0
+networkx==3.6.1
+nexus-rpc==1.4.0
+numpy==2.5.2
+orjson==3.11.9
+packaging==26.3
+peft==0.20.0
+phonemizer==3.4.0
+prometheus-client==0.26.0
+protobuf==7.35.1
+psutil==7.2.2
+pycparser==3.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+pydantic-settings==2.15.0
+pygments==2.20.0
+pyjwt==2.13.0
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+python-multipart==0.0.32
+pyyaml==6.0.3
+regex==2026.7.19
+rich==15.0.0
+s3transfer==0.19.2
+safetensors==0.8.0
+setuptools==78.1.0
+shellingham==1.5.4
+six==1.17.0
+sqlalchemy==2.0.52
+starlette==1.6.0
+structlog==25.5.0
+sympy==1.14.0
+temporalio==1.31.0
+tokenizers==0.22.2
+torch @ https://download-r2.pytorch.org/whl/cu132/torch-2.13.0%2Bcu132-cp312-cp312-win_amd64.whl#sha256=0bcf7ae00b2e20ef2b53af2e764a4fd8646b913bfaaeba2b9c975e672e8c7902
+tqdm==4.70.0
+transformers==5.15.0
+typer==0.27.1
+types-protobuf==7.34.1.20260518
+typing-extensions==4.15.0
+typing-inspection==0.4.3
+urllib3==2.7.0
+uvicorn==0.52.1
+watchfiles==1.2.0
+websockets==17.0.1
