@@ -14,10 +14,15 @@ import { AuthError } from "@/lib/auth/types";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
+  if (request.url.length > 8_192) {
+    const response = authErrorResponse(
+      new AuthError("invalid_authentication_callback", 400),
+    );
+    response.headers.append("set-cookie", clearLoginCookie());
+    return response;
+  }
+
   try {
-    if (request.url.length > 8_192) {
-      throw new AuthError("invalid_authentication_callback", 400);
-    }
     const runtime = getAuthRuntime();
     const result = await runtime.service.completeLogin(
       new URL(request.url),

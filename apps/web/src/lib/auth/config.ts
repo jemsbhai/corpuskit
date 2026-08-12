@@ -3,7 +3,7 @@ import { AuthConfigurationError, type WebAuthConfig } from "./types";
 const tokenPattern = /^[A-Za-z0-9._:/-]{1,512}$/u;
 const redisPrefixPattern = /^[A-Za-z0-9:_-]{1,64}$/u;
 const base64UrlPattern = /^[A-Za-z0-9_-]{43,684}$/u;
-const returnPathPattern = /^\/(?:[A-Za-z0-9._~-]+\/?)*$/u;
+const returnPathPattern = /^\/[A-Za-z0-9._~\/-]*$/u;
 
 function invalid(): never {
   throw new AuthConfigurationError();
