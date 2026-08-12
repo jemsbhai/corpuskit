@@ -289,7 +289,7 @@ class PhoibleSnapshotProvisioner:
                     "The PHOIBLE source failed pinned SHA-256 verification.",
                 )
 
-            os.chmod(temp_path, 0o640)
+            os.chmod(temp_path, 0o600)
             os.replace(temp_path, self._destination)
             _fsync_directory(self._cache_dir)
         except PhoibleProvisioningError:

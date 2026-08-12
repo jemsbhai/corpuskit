@@ -36,6 +36,38 @@ describe("web auth configuration", () => {
     expect(config.sessionAbsoluteSeconds).toBe(28_800);
   });
 
+  it("accepts bounded nested and trailing-slash return paths", () => {
+    const longest = `/${"a".repeat(127)}`;
+    const config = parseWebAuthConfig(
+      base({
+        CORPUSKIT_WEB_ALLOWED_RETURN_PATHS: JSON.stringify([
+          "/",
+          "/projects/team-1/~draft_v2./",
+          longest,
+        ]),
+      }),
+    );
+
+    expect(config.allowedReturnPaths).toEqual(
+      new Set(["/", "/projects/team-1/~draft_v2./", longest]),
+    );
+  });
+
+  it("rejects a bounded adversarial return path without ambiguous matching", () => {
+    const adversarial = `/${"-".repeat(126)}!`;
+    expect(adversarial).toHaveLength(128);
+    expect(() =>
+      parseWebAuthConfig(
+        base({
+          CORPUSKIT_WEB_ALLOWED_RETURN_PATHS: JSON.stringify([
+            "/",
+            adversarial,
+          ]),
+        }),
+      ),
+    ).toThrow(AuthConfigurationError);
+  });
+
   it.each([
     ["missing mode", { CORPUSKIT_WEB_AUTH_MODE: "" }],
     ["demo production", { CORPUSKIT_WEB_AUTH_MODE: "demo" }],

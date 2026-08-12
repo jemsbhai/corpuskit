@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
@@ -126,6 +127,20 @@ def test_provision_streams_verifies_and_atomically_installs(tmp_path: Path) -> N
     assert (tmp_path / PHOIBLE_FILENAME).read_bytes() == payload
     assert list(tmp_path.glob("*.tmp")) == []
     assert list(tmp_path.glob(".*.tmp")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not enforced on Windows")
+def test_provision_installs_owner_only_snapshot(tmp_path: Path) -> None:
+    payload = b"InventoryID,Phoneme\n1,p\n"
+    destination = tmp_path / PHOIBLE_FILENAME
+
+    PhoibleSnapshotProvisioner(
+        tmp_path,
+        snapshot=_snapshot(payload),
+        fetcher=_fetch(payload),
+    ).provision(timeout_seconds=5)
+
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
 
 def test_force_download_failure_preserves_valid_cache(tmp_path: Path) -> None:

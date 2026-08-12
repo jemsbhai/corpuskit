@@ -149,6 +149,58 @@ describe("OIDC route flow", () => {
     await expect(missing.json()).resolves.toEqual({ authenticated: false });
   });
 
+  it("rejects an oversized callback before provider exchange and clears correlation", async () => {
+    const started = await login(new Request("https://web.example/auth/login"));
+    const loginCookie = started.headers.get("set-cookie") ?? "";
+    const correlation = cookieValue(loginCookie, "__Host-corpuskit_login");
+    const state = new URL(
+      started.headers.get("location") ?? "",
+    ).searchParams.get("state");
+    const prefix = "https://web.example/auth/callback?code=";
+    const suffix = `&state=${encodeURIComponent(state ?? "")}`;
+    const request = new Request(
+      `${prefix}${"a".repeat(8_193 - prefix.length - suffix.length)}${suffix}`,
+      { headers: { cookie: `__Host-corpuskit_login=${correlation}` } },
+    );
+    expect(request.url).toHaveLength(8_193);
+
+    const response = await callback(request);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: "invalid_authentication_callback",
+    });
+    expect(response.headers.get("set-cookie")).toContain(
+      "__Host-corpuskit_login=;",
+    );
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(oidc.exchange).not.toHaveBeenCalled();
+  });
+
+  it("allows the exact callback URL limit to reach the authenticated exchange", async () => {
+    const started = await login(new Request("https://web.example/auth/login"));
+    const loginCookie = started.headers.get("set-cookie") ?? "";
+    const correlation = cookieValue(loginCookie, "__Host-corpuskit_login");
+    const state = new URL(
+      started.headers.get("location") ?? "",
+    ).searchParams.get("state");
+    const prefix = "https://web.example/auth/callback?code=";
+    const suffix = `&state=${encodeURIComponent(state ?? "")}`;
+    const callbackUrl = `${prefix}${"a".repeat(
+      8_192 - prefix.length - suffix.length,
+    )}${suffix}`;
+    expect(callbackUrl).toHaveLength(8_192);
+
+    const response = await callback(
+      new Request(callbackUrl, {
+        headers: { cookie: `__Host-corpuskit_login=${correlation}` },
+      }),
+    );
+
+    expect(response.status).toBe(303);
+    expect(oidc.exchange).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects open redirects, duplicate return parameters, and correlation mismatch", async () => {
     for (const url of [
       "https://web.example/auth/login?returnTo=https%3A%2F%2Fevil.example",
