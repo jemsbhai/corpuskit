@@ -1,0 +1,155 @@
+{
+  "benchmarks": {
+    "cached_inventory_search_http": {
+      "limits_seconds": {
+        "p95": 0.4,
+        "p99": 1.0
+      },
+      "maximum_seconds": 0.001210046,
+      "median_seconds": 0.000983131,
+      "minimum_seconds": 0.00092789,
+      "p95_seconds": 0.001206851,
+      "p99_seconds": 0.001210046,
+      "samples": 20,
+      "scope": "in-process ASGI; real checksum-verified cached PHOIBLE"
+    },
+    "cached_phonology_status_http": {
+      "limits_seconds": {
+        "p95": 0.4,
+        "p99": 1.0
+      },
+      "maximum_seconds": 0.001783202,
+      "median_seconds": 0.000971734,
+      "minimum_seconds": 0.000951084,
+      "p95_seconds": 0.001621884,
+      "p99_seconds": 0.001783202,
+      "samples": 20,
+      "scope": "in-process ASGI; real loaded PHOIBLE status"
+    },
+    "evaluate_100_sentences": {
+      "limits_seconds": {
+        "p95": 10.0
+      },
+      "maximum_seconds": 0.050891875,
+      "median_seconds": 0.045824126,
+      "minimum_seconds": 0.044807305,
+      "p95_seconds": 0.048037914,
+      "p99_seconds": 0.050891875,
+      "samples": 20,
+      "scope": "CorpusKit adapter; real CorpusGen and eSpeak"
+    },
+    "export_10000_sentences_json": {
+      "limits_seconds": {
+        "p95": 10.0
+      },
+      "maximum_seconds": 0.010744499,
+      "median_seconds": 0.010408903,
+      "minimum_seconds": 0.010088381,
+      "p95_seconds": 0.010743627,
+      "p99_seconds": 0.010744499,
+      "samples": 20,
+      "scope": "CorpusKit deterministic JSON export encoder"
+    },
+    "greedy_select_1000_prephonemized": {
+      "limits_seconds": {
+        "p95": 15.0
+      },
+      "maximum_seconds": 0.002434974,
+      "median_seconds": 0.001607733,
+      "minimum_seconds": 0.001222715,
+      "p95_seconds": 0.002278453,
+      "p99_seconds": 0.002434974,
+      "samples": 20,
+      "scope": "public CorpusGen greedy selector; no G2P"
+    },
+    "job_status_http_no_persistence": {
+      "limits_seconds": {
+        "p95": 0.4,
+        "p99": 1.0
+      },
+      "maximum_seconds": 0.00073158,
+      "median_seconds": 0.000503433,
+      "minimum_seconds": 0.000470634,
+      "p95_seconds": 0.000530142,
+      "p99_seconds": 0.00073158,
+      "samples": 20,
+      "scope": "in-process ASGI/control serialization; static service seam"
+    },
+    "job_submission_http_no_persistence": {
+      "limits_seconds": {
+        "p95": 0.3
+      },
+      "maximum_seconds": 0.000796186,
+      "median_seconds": 0.000583571,
+      "minimum_seconds": 0.000561298,
+      "p95_seconds": 0.000606405,
+      "p99_seconds": 0.000796186,
+      "samples": 20,
+      "scope": "in-process ASGI/auth/validation/control serialization; static service seam"
+    }
+  },
+  "environment": {
+    "architecture": "x86_64",
+    "cpu_model": "x86_64",
+    "logical_cpu_count": 4,
+    "os": "Linux",
+    "os_release": "6.17.0-1020-azure",
+    "profile_id": "github-actions-ubuntu-24.04-x64",
+    "profile_schema_version": "corpuskit.performance-profile.v1",
+    "python": "3.12.13",
+    "python_implementation": "CPython"
+  },
+  "fixture": {
+    "schema_version": "corpuskit.performance-fixture.v1",
+    "sha256": "a0cd03f3e0f9ad3395a08dc7ba3bbd0d23567db06f722649528ee659ca75f244"
+  },
+  "measurement_protocol": {
+    "clock": "perf_counter_ns",
+    "percentile_method": "nearest_rank",
+    "samples_per_benchmark": 20,
+    "warmups_per_benchmark": 3
+  },
+  "recorded_at": "2026-08-12T18:25:51.496729+00:00",
+  "schema_version": "corpuskit.performance-result.v1",
+  "source": {
+    "corpusgen_version": "0.1.7",
+    "corpuskit_version": "0.1.0a1",
+    "git_dirty": false,
+    "git_revision": "facfdd60223f501dbe3aeb9222eda92c60e29d4f"
+  },
+  "suite_version": 1,
+  "unmeasured_acceptance_targets": [
+    "cpu_queue_start_under_provisioned_load",
+    "gpu_queue_start_under_provisioned_load",
+    "postgres_job_status_and_submission",
+    "core_web_vitals",
+    "initial_javascript_gzip",
+    "24_hour_staging_soak"
+  ],
+  "worker_memory": {
+    "final_rss_bytes": 635572224,
+    "growth_ratio": 0.0,
+    "jobs": 100,
+    "measured": true,
+    "monotonic_growth": false,
+    "passed": true,
+    "post_warm_rss_bytes": 635572224,
+    "rss_samples_bytes": [
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224,
+      635572224
+    ],
+    "sample_every_jobs": 10,
+    "schema_version": "corpuskit.worker-memory-result.v1",
+    "scope": "production parent worker RSS; 100 killable child-process jobs with real CorpusKit evaluation/CorpusGen/eSpeak",
+    "sentences_per_job": 25,
+    "within_ten_percent": true
+  }
+}
