@@ -1,0 +1,164 @@
+# Render-only fixture. The TEST-NET CIDRs, example hostnames, and synthetic digests are
+# intentionally non-routable and MUST NOT be copied into a deployment.
+images:
+  api: {repository: registry.example/corpuskit/api, digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+  web: {repository: registry.example/corpuskit/web, digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+  workerBatch: {repository: registry.example/corpuskit/worker-batch, digest: "sha256:3333333333333333333333333333333333333333333333333333333333333333"}
+  workerExternalProvider: {repository: registry.example/corpuskit/worker-external, digest: "sha256:4444444444444444444444444444444444444444444444444444444444444444"}
+  workerGpuInference: {repository: registry.example/corpuskit/worker-gpu-inference, digest: "sha256:5555555555555555555555555555555555555555555555555555555555555555"}
+  workerGpuTraining: {repository: registry.example/corpuskit/worker-gpu-training, digest: "sha256:6666666666666666666666666666666666666666666666666666666666666666"}
+
+database:
+  api: {secretName: corpuskit-test-db-api, key: database-url}
+  dispatcher: {secretName: corpuskit-test-db-dispatcher, key: database-url}
+  workerBatch: {secretName: corpuskit-test-db-worker-batch, key: database-url}
+  workerExternalProvider: {secretName: corpuskit-test-db-worker-external, key: database-url}
+  workerGpuInference: {secretName: corpuskit-test-db-worker-gpu-inference, key: database-url}
+  workerGpuTraining: {secretName: corpuskit-test-db-worker-gpu-training, key: database-url}
+  adoptionBatch: {secretName: corpuskit-test-db-adoption-batch, key: database-url}
+  adoptionExternalProvider: {secretName: corpuskit-test-db-adoption-external, key: database-url}
+  adoptionGpuInference: {secretName: corpuskit-test-db-adoption-gpu-inference, key: database-url}
+  adoptionGpuTraining: {secretName: corpuskit-test-db-adoption-gpu-training, key: database-url}
+  migrator: {secretName: corpuskit-test-db-migrator, key: database-url}
+  maintenance: {secretName: corpuskit-test-db-maintenance, key: database-url}
+
+oidc:
+  issuer: https://identity.example/realms/corpuskit
+  audience: corpuskit-api
+  clientId: corpuskit-web
+  redirectUri: https://corpuskit.example/auth/callback
+  clientSecret: {secretName: corpuskit-test-oidc-client, key: client-secret}
+
+temporal:
+  address: temporal.example:7233
+  namespace: corpuskit-production
+  credentials:
+    api: {secretName: corpuskit-test-temporal-api, key: api-key}
+    dispatcher: {secretName: corpuskit-test-temporal-dispatcher, key: api-key}
+    workerBatch: {secretName: corpuskit-test-temporal-worker-batch, key: api-key}
+    workerExternalProvider: {secretName: corpuskit-test-temporal-worker-external, key: api-key}
+    workerGpuInference: {secretName: corpuskit-test-temporal-worker-gpu-inference, key: api-key}
+    workerGpuTraining: {secretName: corpuskit-test-temporal-worker-gpu-training, key: api-key}
+
+artifactStorage:
+  endpoint: https://objects.example
+  bucket: corpuskit-production
+  region: us-east-1
+  encryption: aws:kms
+  kmsKeyId: {secretName: corpuskit-test-kms, key: kms-key-id, optional: false}
+  credentials:
+    api: {secretName: corpuskit-test-s3-api, accessKey: access-key-id, secretKey: secret-access-key}
+    workerBatch: {secretName: corpuskit-test-s3-worker-batch, accessKey: access-key-id, secretKey: secret-access-key}
+    workerExternalProvider: {secretName: corpuskit-test-s3-worker-external, accessKey: access-key-id, secretKey: secret-access-key}
+    workerGpuInference: {secretName: corpuskit-test-s3-worker-gpu-inference, accessKey: access-key-id, secretKey: secret-access-key}
+    workerGpuTraining: {secretName: corpuskit-test-s3-worker-gpu-training, accessKey: access-key-id, secretKey: secret-access-key}
+    maintenance: {secretName: corpuskit-test-s3-maintenance, accessKey: access-key-id, secretKey: secret-access-key}
+
+metrics:
+  bearerToken: {secretName: corpuskit-test-metrics, key: token}
+
+api:
+  allowedOrigins: [https://corpuskit.example]
+
+web:
+  sessionRedis: {secretName: corpuskit-test-web-redis, key: redis-url}
+  stateSecret: {secretName: corpuskit-test-web-state, key: state-secret}
+  sessionEncryptionKeys: {secretName: corpuskit-test-web-encryption, key: encryption-keys-json}
+
+workers:
+  common:
+    modelCacheClaim: corpuskit-test-model-cache
+    datgIndexCacheClaim: corpuskit-test-datg-cache
+  batch:
+    datgRuntimePolicies:
+      - runtime_id: datg-production
+        model: &datg_pin
+          repository_id: example/model
+          revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          snapshot_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        tokenizer: *datg_pin
+        allowed_quantizations: [none]
+  externalProvider:
+    hostedModelPolicies:
+      - provider: openai
+        model: openai/gpt-4.1-mini
+        connection_id: openai-production
+        credential_ref: {reference: secret://env/CORPUSKIT_PROVIDER_OPENAI_API_KEY}
+        input_cost_per_million_usd: 1
+        output_cost_per_million_usd: 4
+        max_output_tokens_per_request: 4096
+        request_delay_seconds: 0.25
+        prompt_templates:
+          - template_id: coverage-v1
+            template_ref: {reference: secret://env/CORPUSKIT_PROVIDER_PROMPT_COVERAGE_V1}
+            sha256: 3ae59329274f6a5cb0de3035851d9c600964a351a26b4b43a6b95f045c3065d2
+            size_bytes: 47
+            max_rendered_bytes: 4096
+    huggingFaceRepositoryPolicies:
+      - dataset: example/corpuskit-demo
+        config: default
+        split: train
+        text_column: text
+        revision: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        language: en-us
+        max_samples: 1000
+        trust_remote_code: false
+    providerSecrets:
+      - {name: CORPUSKIT_PROVIDER_OPENAI_API_KEY, secretName: corpuskit-test-provider-openai, key: api-key}
+      - {name: CORPUSKIT_PROVIDER_PROMPT_COVERAGE_V1, secretName: corpuskit-test-provider-prompts, key: coverage-v1}
+  gpuInference:
+    localModelPolicies:
+      - pin: {model: example/model, revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+        artifact_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        allowed_devices: [cuda]
+        allowed_quantizations: [none]
+        allow_phon_rl_adapters: true
+    datgRuntimePolicies:
+      - runtime_id: datg-production
+        model: *datg_pin
+        tokenizer: *datg_pin
+        allowed_quantizations: [none]
+  gpuTraining:
+    phonRlRuntimePolicies:
+      - runtime_id: phon-rl-production
+        model: &phon_rl_pin
+          repository_id: example/model
+          revision: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          snapshot_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        tokenizer: *phon_rl_pin
+        cache_root_id: phon-rl-production
+        cache_mount_read_only: true
+        allow_static_prompts: false
+        allow_peft: false
+        allowed_peft_ranks: []
+        allowed_peft_alphas: []
+        allowed_prompt_strategies: [coverage]
+    phonRlCacheRoots: {phon-rl-production: /models/phon-rl-production}
+
+phoible:
+  cacheClaim: corpuskit-test-phoible-cache
+  sourceClaim: corpuskit-test-phoible-source
+
+ingress:
+  host: corpuskit.example
+  tlsSecretName: corpuskit-test-ingress-tls
+
+networkPolicy:
+  cidrs:
+    database: [192.0.2.10/32]
+    temporal: [192.0.2.20/32]
+    artifactStorage: [192.0.2.30/32]
+    redis: [192.0.2.40/32]
+    oidc: [192.0.2.50/32]
+    providers: [192.0.2.60/32]
+    telemetryExporter: [192.0.2.70/32]
+
+monitoring:
+  runbookBaseUrl: https://runbooks.example/corpuskit
+  otelCollector:
+    enabled: true
+    image:
+      repository: otel/opentelemetry-collector-contrib
+      digest: "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+    exporterEndpoint: https://telemetry.example/v1/otlp
+    exporterAuthorization: {secretName: corpuskit-test-otel-export, key: authorization, optional: false}

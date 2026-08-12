@@ -1,0 +1,303 @@
+global:
+  environment: production
+  logLevel: INFO
+  imagePullSecrets: []
+  # Release images are currently published for linux/amd64 only.
+  nodeSelector: {kubernetes.io/os: linux, kubernetes.io/arch: amd64}
+  # Custom metadata may not replace chart-owned selector, rollout-checksum, worker-profile,
+  # or Helm hook keys. Both schema and template validation reject those reserved names.
+  podLabels: {}
+  podAnnotations: {}
+
+images:
+  api:
+    repository: ""
+    digest: ""
+  web:
+    repository: ""
+    digest: ""
+  workerBatch:
+    repository: ""
+    digest: ""
+  workerExternalProvider:
+    repository: ""
+    digest: ""
+  workerGpuInference:
+    repository: ""
+    digest: ""
+  workerGpuTraining:
+    repository: ""
+    digest: ""
+  pullPolicy: IfNotPresent
+
+serviceAccounts:
+  api: corpuskit-api
+  web: corpuskit-web
+  dispatcher: corpuskit-dispatcher
+  workerBatch: corpuskit-worker-batch
+  workerExternalProvider: corpuskit-worker-external-provider
+  workerGpuInference: corpuskit-worker-gpu-inference
+  workerGpuTraining: corpuskit-worker-gpu-training
+  migrator: corpuskit-migrator
+  phoible: corpuskit-phoible
+  maintenance: corpuskit-maintenance
+  telemetry: corpuskit-telemetry
+
+database:
+  # Each reference must point at a pre-created Secret containing a credential-bearing
+  # postgresql+asyncpg URL in the named key. Production validation rejects reuse.
+  api: {secretName: "", key: database-url}
+  dispatcher: {secretName: "", key: database-url}
+  workerBatch: {secretName: "", key: database-url}
+  workerExternalProvider: {secretName: "", key: database-url}
+  workerGpuInference: {secretName: "", key: database-url}
+  workerGpuTraining: {secretName: "", key: database-url}
+  adoptionBatch: {secretName: "", key: database-url}
+  adoptionExternalProvider: {secretName: "", key: database-url}
+  adoptionGpuInference: {secretName: "", key: database-url}
+  adoptionGpuTraining: {secretName: "", key: database-url}
+  migrator: {secretName: "", key: database-url}
+  maintenance: {secretName: "", key: database-url}
+  port: 5432
+
+oidc:
+  # Production identity and callback URLs use the TLS default port (implicit or explicit :443).
+  issuer: ""
+  audience: ""
+  clientId: ""
+  redirectUri: ""
+  scopes: "openid profile offline_access"
+  clientSecret: {secretName: "", key: client-secret}
+
+temporal:
+  # The port embedded in address must exactly match port, which drives NetworkPolicy egress.
+  address: ""
+  namespace: ""
+  port: 7233
+  tls: true
+  credentials:
+    api: {secretName: "", key: api-key}
+    dispatcher: {secretName: "", key: api-key}
+    workerBatch: {secretName: "", key: api-key}
+    workerExternalProvider: {secretName: "", key: api-key}
+    workerGpuInference: {secretName: "", key: api-key}
+    workerGpuTraining: {secretName: "", key: api-key}
+
+artifactStorage:
+  # The HTTPS endpoint uses the TLS default port (implicit or explicit :443).
+  endpoint: ""
+  bucket: ""
+  region: ""
+  pathStyle: false
+  encryption: AES256
+  kmsKeyId: {secretName: "", key: kms-key-id, optional: true}
+  credentials:
+    api: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+    workerBatch: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+    workerExternalProvider: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+    workerGpuInference: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+    workerGpuTraining: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+    maintenance: {secretName: "", accessKey: access-key-id, secretKey: secret-access-key}
+
+metrics:
+  bearerToken: {secretName: "", key: token}
+
+api:
+  replicas: 3
+  allowedOrigins: []
+  requiredCapabilities: [corpusgen-core, phoible]
+  maxUploadBytes: 10485760
+  rateLimit:
+    enabled: true
+    windowSeconds: 60
+    readRequests: 600
+    writeRequests: 120
+    retentionWindows: 3
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    cpuUtilization: 70
+    memoryUtilization: 80
+  pdb: {enabled: true, minAvailable: 2}
+
+web:
+  replicas: 3
+  allowedReturnPaths:
+    - /
+    - /projects
+    - /evaluate
+    - /analysis
+    - /capabilities
+    - /g2p
+    - /inventory
+    - /coverage
+    - /selection
+    - /generation
+    - /advanced
+    - /jobs
+    - /artifacts
+  sessionRedis: {secretName: "", key: redis-url}
+  stateSecret: {secretName: "", key: state-secret}
+  sessionEncryptionKeys: {secretName: "", key: encryption-keys-json}
+  resources:
+    requests: {cpu: 200m, memory: 384Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    cpuUtilization: 70
+    memoryUtilization: 80
+  pdb: {enabled: true, minAvailable: 2}
+
+dispatcher:
+  replicas: 2
+  batchSize: 20
+  pollSeconds: 1
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  pdb: {enabled: true, minAvailable: 1}
+
+workers:
+  common:
+    gracefulShutdownSeconds: 60
+    artifactMaxBytes: 37748736
+    modelCacheClaim: ""
+    datgIndexCacheClaim: ""
+  batch:
+    enabled: true
+    replicas: 2
+    deadlineSeconds: 300
+    datgRuntimePolicies: []
+    resources:
+      requests: {cpu: "1", memory: 2Gi}
+      limits: {cpu: "4", memory: 8Gi}
+    autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 20, cpuUtilization: 75}
+    pdb: {enabled: true, minAvailable: 1}
+  externalProvider:
+    enabled: true
+    replicas: 2
+    deadlineSeconds: 300
+    hostedModelPolicies: []
+    huggingFaceRepositoryPolicies: []
+    providerSecrets: []
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: "2", memory: 4Gi}
+    autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 20, cpuUtilization: 70}
+    pdb: {enabled: true, minAvailable: 1}
+  gpuInference:
+    enabled: true
+    replicas: 1
+    deadlineSeconds: 900
+    localModelPolicies: []
+    datgRuntimePolicies: []
+    nodeSelector: {corpuskit.io/gpu-class: inference}
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests: {cpu: "2", memory: 8Gi, nvidia.com/gpu: "1"}
+      limits: {cpu: "8", memory: 32Gi, nvidia.com/gpu: "1"}
+    autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 8, cpuUtilization: 70}
+    pdb: {enabled: false, minAvailable: 1}
+  gpuTraining:
+    enabled: true
+    replicas: 1
+    deadlineSeconds: 3600
+    phonRlRuntimePolicies: []
+    phonRlCacheRoots: {}
+    nodeSelector: {corpuskit.io/gpu-class: training}
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    resources:
+      requests: {cpu: "4", memory: 16Gi, nvidia.com/gpu: "1"}
+      limits: {cpu: "16", memory: 64Gi, nvidia.com/gpu: "1"}
+    autoscaling: {enabled: false, minReplicas: 1, maxReplicas: 4, cpuUtilization: 70}
+    pdb: {enabled: false, minAvailable: 1}
+
+phoible:
+  enabled: true
+  cacheClaim: ""
+  sourceClaim: ""
+  sourcePath: /source/phoible.csv
+  timeoutSeconds: 60
+  jobTtlSeconds: 86400
+
+migration:
+  enabled: true
+  jobTtlSeconds: 86400
+
+maintenance:
+  enabled: true
+  schedule: "17 * * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  limit: 500
+  maxReconciliationPages: 10
+  maxStagingPages: 10
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 2Gi}
+
+ingress:
+  enabled: true
+  className: nginx
+  host: ""
+  tlsSecretName: ""
+  # Chart-owned nginx TLS/body/timeout annotations cannot be overridden here.
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  ports:
+    redis: 6379
+  dns:
+    namespaceSelector: {kubernetes.io/metadata.name: kube-system}
+    podSelector: {k8s-app: kube-dns}
+  ingressController:
+    namespaceSelector: {kubernetes.io/metadata.name: ingress-nginx}
+    podSelector: {app.kubernetes.io/name: ingress-nginx}
+  monitoring:
+    namespaceSelector: {kubernetes.io/metadata.name: monitoring}
+    podSelector: {app.kubernetes.io/name: prometheus}
+  # Kubernetes NetworkPolicy cannot allow FQDNs. Resolve and maintain these exact
+  # provider-controlled CIDRs, or use an egress gateway with stable addresses.
+  cidrs:
+    database: []
+    temporal: []
+    artifactStorage: []
+    redis: []
+    oidc: []
+    providers: []
+    phoibleSource: []
+    telemetryExporter: []
+
+monitoring:
+  enabled: true
+  releaseLabel: kube-prometheus-stack
+  scrapeInterval: 30s
+  scrapeTimeout: 10s
+  contractAlertsEnabled: true
+  dashboardEnabled: true
+  runbookBaseUrl: ""
+  otelCollector:
+    enabled: false
+    image:
+      repository: otel/opentelemetry-collector-contrib
+      digest: ""
+    # The external HTTPS exporter uses the TLS default port (implicit or explicit :443).
+    exporterEndpoint: ""
+    exporterAuthorization: {secretName: "", key: authorization}
+    replicas: 2
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 1Gi}

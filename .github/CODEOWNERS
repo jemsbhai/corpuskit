@@ -1,0 +1,12 @@
+# Default owner for all source, documentation, and generated policy changes.
+* @jemsbhai
+
+# Security- and release-sensitive surfaces require explicit maintainer review.
+/.github/ @jemsbhai
+/docker/ @jemsbhai
+/deploy/ @jemsbhai
+/src/corpuskit/auth/ @jemsbhai
+/src/corpuskit/persistence/ @jemsbhai
+/src/corpuskit/workflows/ @jemsbhai
+/scripts/release/ @jemsbhai
+/SECURITY.md @jemsbhai

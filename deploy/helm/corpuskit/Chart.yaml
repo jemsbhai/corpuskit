@@ -1,0 +1,11 @@
+apiVersion: v2
+name: corpuskit
+description: Hardened production deployment for the CorpusKit control and compute planes
+type: application
+version: 0.1.0
+appVersion: "0.1.0a1"
+kubeVersion: ">=1.35.0-0"
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/prerelease: "true"

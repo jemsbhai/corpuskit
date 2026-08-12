@@ -1,0 +1,162 @@
+name: Publish verified Python distributions
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable CorpusKit release tag
+        required: true
+        type: string
+      confirmation:
+        description: Type "publish corpuskit-app TAG" with the exact tag
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pypi-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  GH_API_VERSION: "2026-03-10"
+  COSIGN_VERSION: v3.1.3
+
+jobs:
+  publisher-policy:
+    name: Require configured Trusted Publisher and protected approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # Read the pypi-environment protection policy.
+      contents: read
+    steps:
+      - name: Verify the explicit publication gate
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED_CONFIRMATION: publish corpuskit-app ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          TRUSTED_PUBLISHER_CONFIGURED: ${{ vars.PYPI_TRUSTED_PUBLISHER_CONFIGURED }}
+        run: |
+          set -euo pipefail
+          test "${CONFIRMATION}" = "${EXPECTED_CONFIRMATION}"
+          test "${TRUSTED_PUBLISHER_CONFIGURED}" = true
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]
+          pypi_environment="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/environments/pypi")"
+          jq -e '
+            [.protection_rules[]
+              | select(.type == "required_reviewers")
+              | select(.prevent_self_review == true)
+              | .reviewers
+              | length]
+            | any(. > 0)
+          ' <<<"${pypi_environment}" >/dev/null
+
+  prepare:
+    name: Verify immutable release distributions for publication
+    needs: publisher-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      attestations: read # Verify release provenance and both package SBOM predicates.
+      contents: read
+    steps:
+      - name: Check out the immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Download and verify immutable release material
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release/release_contract.py versions --tag "${TAG}"
+          install -d release-assets pypi-dist
+          gh release verify "${TAG}" --repo "${GITHUB_REPOSITORY}"
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir release-assets
+          for asset in release-assets/*; do
+            gh release verify-asset "${TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}"
+          done
+          python scripts/release/release_contract.py verify-assets \
+            --assets release-assets \
+            --tag "${TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "$(git rev-parse HEAD)"
+          identity="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${TAG}"
+          for artifact in release-assets/release-manifest.json release-assets/SHA256SUMS; do
+            cosign verify-blob \
+              --bundle "${artifact}.sigstore.json" \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${artifact}"
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
+          done
+          for artifact in release-assets/*.whl release-assets/*.tar.gz; do
+            cosign verify-blob \
+              --bundle "${artifact}.sigstore.json" \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${artifact}"
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://spdx.dev/Document/v2.3"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://cyclonedx.org/bom"
+            cp "${artifact}" pypi-dist/
+          done
+          test "$(find pypi-dist -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 1
+          test "$(find pypi-dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 1
+          python scripts/release/release_contract.py distributions \
+            --directory pypi-dist \
+            --tag "${TAG}"
+
+      - name: Pass only verified distributions to the OIDC publication job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pypi-distributions-${{ inputs.tag }}
+          path: |
+            pypi-dist/*.whl
+            pypi-dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish through PyPI Trusted Publishing
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/corpuskit-app/
+    permissions:
+      id-token: write # Exchange GitHub OIDC for a short-lived PyPI publish token.
+    steps:
+      - name: Retrieve the already verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pypi-distributions-${{ inputs.tag }}
+          path: dist
+
+      - name: Publish without a long-lived credential or rebuild
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
+          attestations: true
+          skip-existing: false
+          verbose: false

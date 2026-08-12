@@ -1,0 +1,121 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-migrate
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrator
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-20"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: {{ .Values.migration.jobTtlSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" . "component" "migrator") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.migrator }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.global.nodeSelector | nindent 8 }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "corpuskit.image" (dict "image" .Values.images.api) | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: [corpuskit-db]
+          args: [upgrade]
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: CORPUSKIT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.migrator.secretName }}
+                  key: {{ .Values.database.migrator.key }}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        {{- include "corpuskit.tmpVolume" "64Mi" | nindent 8 }}
+{{- end }}
+{{- if .Values.phoible.enabled }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "corpuskit.fullname" . }}-phoible
+  labels:
+    {{- include "corpuskit.labels" . | nindent 4 }}
+    app.kubernetes.io/component: phoible
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: {{ .Values.phoible.jobTtlSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "corpuskit.selectorLabels" (dict "root" . "component" "phoible") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.phoible }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        {{- toYaml .Values.global.nodeSelector | nindent 8 }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "corpuskit.podSecurityContext" . | nindent 8 }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: provision
+          image: {{ include "corpuskit.image" (dict "image" .Values.images.api) | quote }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command: [corpuskit-phoible]
+          args:
+            - provision
+            - --json
+            - --timeout-seconds
+            - {{ .Values.phoible.timeoutSeconds | quote }}
+            {{- if .Values.phoible.sourceClaim }}
+            - --source-file
+            - {{ .Values.phoible.sourcePath | quote }}
+            {{- end }}
+          securityContext:
+            {{- include "corpuskit.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: phoible-cache, mountPath: /home/corpuskit/.corpusgen}
+            {{- if .Values.phoible.sourceClaim }}
+            - {name: phoible-source, mountPath: /source, readOnly: true}
+            {{- end }}
+      volumes:
+        {{- include "corpuskit.tmpVolume" "64Mi" | nindent 8 }}
+        - name: phoible-cache
+          persistentVolumeClaim: {claimName: {{ .Values.phoible.cacheClaim }}}
+        {{- if .Values.phoible.sourceClaim }}
+        - name: phoible-source
+          persistentVolumeClaim: {claimName: {{ .Values.phoible.sourceClaim }}}
+        {{- end }}
+{{- end }}

@@ -1,0 +1,866 @@
+name: Immutable release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_API_VERSION: "2026-03-10"
+  COSIGN_VERSION: v3.1.3
+  SYFT_VERSION: v1.51.0
+  TRIVY_VERSION: v0.73.0
+  BUILDX_VERSION: v0.36.1
+
+jobs:
+  repository-policy:
+    name: Verify repository release policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # Read the release-environment protection policy.
+      contents: read
+    steps:
+      - name: Require immutable releases and protected release approval
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMMUTABLE_RELEASES_CONFIGURED: ${{ vars.IMMUTABLE_RELEASES_CONFIGURED }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The immutable-release settings endpoint requires repository-admin read,
+          # which GITHUB_TOKEN intentionally cannot receive. An administrator records
+          # the precondition in this variable; post-publication `gh release verify`
+          # provides the authoritative proof and fails the workflow if it is false.
+          test "${IMMUTABLE_RELEASES_CONFIGURED}" = true
+
+          release_environment="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/environments/release")"
+          jq -e '
+            [.protection_rules[]
+              | select(.type == "required_reviewers")
+              | select(.prevent_self_review == true)
+              | .reviewers
+              | length]
+            | any(. > 0)
+          ' <<<"${release_environment}" >/dev/null
+
+  preflight:
+    name: Approve and validate signed source tag
+    needs: repository-policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: release
+    permissions:
+      actions: read # Require successful CI and scheduled-quality evidence for the exact SHA.
+      contents: read
+    outputs:
+      pep440: ${{ steps.version.outputs.pep440 }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out the immutable tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate clean source and version contract
+        id: version
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "${RUN_ATTEMPT}" = 1
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test "$(git cat-file -t "refs/tags/${TAG}")" = tag
+          test "$(git rev-list -n 1 "refs/tags/${TAG}")" = "${SOURCE_SHA}"
+          git merge-base --is-ancestor "${SOURCE_SHA}" "origin/${DEFAULT_BRANCH}"
+          python scripts/release/release_contract.py versions \
+            --tag "${TAG}" \
+            --source-sha "${SOURCE_SHA}" \
+            --require-changelog \
+            --github-output "${GITHUB_OUTPUT}"
+
+      - name: Require an approved exact-profile performance baseline
+        run: |
+          python -m scripts.performance.baseline_policy \
+            --baseline benchmarks/baselines/github-actions-ubuntu-24.04-x64.v1.json \
+            --expected-profile github-actions-ubuntu-24.04-x64 \
+            --mode release \
+            --enforce
+
+      - name: Require a verified tag and successful exact-SHA quality workflows
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_ref="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/git/ref/tags/${TAG}")"
+          tag_object_sha="$(jq -er '.object | select(.type == "tag") | .sha' <<<"${tag_ref}")"
+          tag_object="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/git/tags/${tag_object_sha}")"
+          jq -e --arg tag "${TAG}" --arg sha "${SOURCE_SHA}" '
+            .tag == $tag
+            and .object.type == "commit"
+            and .object.sha == $sha
+            and .verification.verified == true
+            and .verification.reason == "valid"
+          ' <<<"${tag_object}" >/dev/null
+
+          for required_workflow in "ci.yml" "quality-scheduled.yml"; do
+            workflow_runs="$(gh api \
+              -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+              "repos/${REPOSITORY}/actions/workflows/${required_workflow}/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
+            jq -e --arg sha "${SOURCE_SHA}" '
+              [.workflow_runs[]
+                | select(.head_sha == $sha)
+                | select(.conclusion == "success")]
+              | length > 0
+            ' <<<"${workflow_runs}" >/dev/null
+          done
+
+          if gh release view "${TAG}" --repo "${REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; immutable versions are never rebuilt." >&2
+            exit 1
+          fi
+
+  python-distributions:
+    name: Build, inspect, sign, and attest Python distributions
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      attestations: write # Persist package build and SBOM attestations.
+      contents: read
+      id-token: write # Mint short-lived Sigstore certificates through GitHub OIDC.
+    steps:
+      - name: Check out the approved tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Set up locked uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          enable-cache: false
+
+      - name: Build once from the tagged source
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/corpuskit-build-environment
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          install -d release-assets
+          python scripts/release/release_contract.py versions --tag "${TAG}"
+          uv lock --check
+          uv sync --frozen --only-group build --no-install-project
+          source "${UV_PROJECT_ENVIRONMENT}/bin/activate"
+          python -c \
+            'import importlib.metadata as metadata; assert metadata.version("hatchling") == "1.32.0"'
+          uv build --no-sources --no-build-isolation --no-index --out-dir dist
+          python scripts/release/release_contract.py distributions \
+            --directory dist \
+            --tag "${TAG}" \
+            --output python-distributions.json
+
+      - name: Install the wheel with locked runtime dependencies and exercise resources
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.preflight.outputs.pep440 }}
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev --no-install-project
+          wheel="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          uv pip install --python .venv/bin/python --no-deps --reinstall "${wheel}"
+          pushd "${RUNNER_TEMP}" >/dev/null
+          "${GITHUB_WORKSPACE}/.venv/bin/python" -I - <<'PY'
+          import os
+          from importlib import metadata, resources
+
+          assert metadata.version("corpuskit-app") == os.environ["EXPECTED_VERSION"]
+          assert resources.files("corpuskit").joinpath("py.typed").is_file()
+          expected = {
+              "corpuskit-api",
+              "corpuskit-continuity",
+              "corpuskit-db",
+              "corpuskit-dispatcher",
+              "corpuskit-maintenance",
+              "corpuskit-phoible",
+              "corpuskit-worker",
+          }
+          entry_points = {
+              entry_point.name: entry_point
+              for entry_point in metadata.entry_points(group="console_scripts")
+              if entry_point.name in expected
+          }
+          assert set(entry_points) == expected
+          assert all(callable(entry_point.load()) for entry_point in entry_points.values())
+          PY
+          for command in \
+            corpuskit-continuity corpuskit-db corpuskit-maintenance corpuskit-phoible; do
+            "${GITHUB_WORKSPACE}/.venv/bin/${command}" --help >/dev/null
+          done
+          popd >/dev/null
+
+      - name: Create SPDX distribution SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: release-assets/corpuskit-app-${{ github.ref_name }}.spdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Create CycloneDX distribution SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: dist
+          format: cyclonedx-json
+          output-file: release-assets/corpuskit-app-${{ github.ref_name }}.cdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate signed build provenance
+        id: distribution-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Attest the SPDX distribution SBOM
+        id: distribution-spdx
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+          sbom-path: release-assets/corpuskit-app-${{ github.ref_name }}.spdx.json
+
+      - name: Attest the CycloneDX distribution SBOM
+        id: distribution-cyclonedx
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+          sbom-path: release-assets/corpuskit-app-${{ github.ref_name }}.cdx.json
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Sign and verify every distribution blob and SBOM
+        shell: bash
+        env:
+          CERT_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+          CYCLONEDX_ATTESTATION_BUNDLE: ${{ steps.distribution-cyclonedx.outputs.bundle-path }}
+          PROVENANCE_ATTESTATION_BUNDLE: ${{ steps.distribution-provenance.outputs.bundle-path }}
+          SPDX_ATTESTATION_BUNDLE: ${{ steps.distribution-spdx.outputs.bundle-path }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          install -d release-assets
+          cp dist/*.whl dist/*.tar.gz release-assets/
+          cp python-distributions.json release-assets/
+          cp "${PROVENANCE_ATTESTATION_BUNDLE}" \
+            "release-assets/corpuskit-app-${TAG}.provenance.attestation.sigstore.json"
+          cp "${SPDX_ATTESTATION_BUNDLE}" \
+            "release-assets/corpuskit-app-${TAG}.spdx.attestation.sigstore.json"
+          cp "${CYCLONEDX_ATTESTATION_BUNDLE}" \
+            "release-assets/corpuskit-app-${TAG}.cdx.attestation.sigstore.json"
+          for artifact in release-assets/*.whl release-assets/*.tar.gz release-assets/*.spdx.json release-assets/*.cdx.json; do
+            cosign sign-blob --yes \
+              --bundle "${artifact}.sigstore.json" \
+              "${artifact}"
+            cosign verify-blob \
+              --bundle "${artifact}.sigstore.json" \
+              --certificate-identity "${CERT_IDENTITY}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${artifact}"
+          done
+
+      - name: Verify GitHub provenance and both SBOM predicates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for artifact in dist/*.whl dist/*.tar.gz; do
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://spdx.dev/Document/v2.3"
+            gh attestation verify "${artifact}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --predicate-type "https://cyclonedx.org/bom"
+          done
+
+      - name: Upload verified Python release material
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-python-${{ github.ref_name }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record workflow-artifact digest
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: test -n "${ARTIFACT_DIGEST}"
+
+  container-images:
+    name: Build, scan, sign, and attest ${{ matrix.component }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - component: api
+            dockerfile: docker/api.Dockerfile
+            target: runtime
+            runtime: python
+          - component: web
+            dockerfile: docker/web.Dockerfile
+            target: runtime
+            runtime: node
+          - component: worker-batch
+            dockerfile: docker/worker.Dockerfile
+            target: worker-batch
+            runtime: python
+          - component: worker-external-provider
+            dockerfile: docker/worker.Dockerfile
+            target: worker-external-provider
+            runtime: python
+          - component: worker-gpu-inference
+            dockerfile: docker/worker.Dockerfile
+            target: worker-gpu-inference
+            runtime: python
+          - component: worker-gpu-training
+            dockerfile: docker/worker.Dockerfile
+            target: worker-gpu-training
+            runtime: python
+    permissions:
+      attestations: write # Persist image build and SBOM attestations.
+      contents: read
+      id-token: write # Mint short-lived Sigstore certificates through GitHub OIDC.
+      packages: write # Push the one-time image digest, signature, and OCI attestations.
+    steps:
+      - name: Check out the approved tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Derive the lowercase GHCR image name
+        id: image
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${REPOSITORY,,}-${COMPONENT}"
+          install -d release-assets
+          echo "name=${image}" >>"${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR with the repository token
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up pinned Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: ${{ env.BUILDX_VERSION }}
+          cache-binary: false
+          cleanup: true
+
+      - name: Reserve a never-before-published version tag
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            echo "${IMAGE}:${TAG} already exists and must never be overwritten." >&2
+            exit 1
+          fi
+
+      - name: Build and push the release image exactly once
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          pull: true
+          no-cache: true
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ steps.image.outputs.name }}:${{ github.ref_name }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.preflight.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.title=CorpusKit ${{ matrix.component }}
+
+      - name: Require the version tag to resolve to the build digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          resolved_digest="$(docker buildx imagetools inspect \
+            "${IMAGE}:${TAG}" --format '{{json .Manifest}}' | jq -er '.digest')"
+          test "${resolved_digest}" = "${DIGEST}"
+
+      - name: Prove non-root read-only execution from the digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}@${DIGEST}"
+          docker pull --platform linux/amd64 "${reference}"
+          configured_user="$(docker image inspect --format '{{.Config.User}}' "${reference}")"
+          configured_principal="${configured_user%%:*}"
+          test -n "${configured_principal}"
+          test "${configured_principal}" != root
+          test "${configured_principal}" != 0
+          if [[ "${RUNTIME}" == node ]]; then
+            docker run --rm --read-only --network none \
+              --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --cap-drop ALL --security-opt no-new-privileges \
+              --entrypoint node "${reference}" \
+              -e 'if (process.getuid() === 0) process.exit(1)'
+          else
+            docker run --rm --read-only --network none \
+              --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --cap-drop ALL --security-opt no-new-privileges \
+              --entrypoint python "${reference}" \
+              -I -c 'import os; assert os.getuid() != 0; import corpuskit'
+          fi
+
+      - name: Smoke real phonology from the exact Python digest
+        if: ${{ matrix.runtime == 'python' }}
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}@${DIGEST}"
+          configured_user="$(docker image inspect --format '{{.Config.User}}' "${reference}")"
+          configured_principal="${configured_user%%:*}"
+          test -n "${configured_principal}"
+          test "${configured_principal}" != root
+          test "${configured_principal}" != 0
+
+          phoible_cache="$(mktemp -d)"
+          chmod 1777 "${phoible_cache}"
+          cleanup() {
+            if [[ -n "${phoible_cache:-}" && -d "${phoible_cache}" ]]; then
+              rm -rf -- "${phoible_cache}"
+            fi
+          }
+          trap cleanup EXIT
+
+          sandbox=(
+            --rm
+            --read-only
+            --tmpfs "/tmp:rw,noexec,nosuid,size=64m"
+            --cap-drop ALL
+            --security-opt no-new-privileges
+            --user "${configured_user}"
+            --env HOME=/home/corpuskit
+          )
+
+          docker run "${sandbox[@]}" --network bridge \
+            --mount "type=bind,source=${phoible_cache},target=/home/corpuskit/.corpusgen" \
+            --entrypoint corpuskit-phoible "${reference}" \
+            provision --json
+
+          # Phonemizer loads an isolated eSpeak library copy per wrapper. Confine its
+          # required executable temp mount to this offline, read-only-cache smoke.
+          docker run "${sandbox[@]}" --network none \
+            --tmpfs "/run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m" \
+            --env TMPDIR=/run/corpuskit-espeak \
+            --env XDG_CONFIG_HOME=/tmp \
+            --mount "type=bind,source=${phoible_cache},target=/home/corpuskit/.corpusgen,readonly" \
+            --entrypoint python "${reference}" \
+            -I -c 'import os; from corpuskit.adapters.corpusgen import CorpusgenAdapter, CorpusgenInventoryAdapter; from corpuskit.adapters.corpusgen.phoible_provisioning import PHOIBLE_BYTES, PHOIBLE_COMMIT, PHOIBLE_SHA256, PhoibleSnapshotProvisioner; assert os.getuid() != 0; status = PhoibleSnapshotProvisioner().status(); assert status.ready and status.revision == PHOIBLE_COMMIT and status.expected_sha256 == PHOIBLE_SHA256 and status.actual_bytes == PHOIBLE_BYTES; transcription = CorpusgenAdapter().phonemize("hello", language="en-us"); assert transcription.ipa and transcription.phonemes; inventory = CorpusgenInventoryAdapter().inventory("en-us"); assert inventory.iso639_3 == "eng" and inventory.phonemes'
+
+      - name: Scan the exact image digest for release-blocking findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          version: ${{ env.TRIVY_VERSION }}
+          cache: false
+          scanners: vuln,secret,misconfig
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+          format: table
+          hide-progress: true
+          timeout: 20m
+
+      - name: Create SPDX image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: release-assets/${{ matrix.component }}-${{ github.ref_name }}.spdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Create CycloneDX image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: release-assets/${{ matrix.component }}-${{ github.ref_name }}.cdx.json
+          syft-version: ${{ env.SYFT_VERSION }}
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Sign the image digest and both SBOM blobs
+        shell: bash
+        env:
+          CERT_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}@${DIGEST}"
+          cosign sign --yes "${reference}"
+          cosign verify \
+            --certificate-identity "${CERT_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${reference}" >/dev/null
+          for sbom in release-assets/*.spdx.json release-assets/*.cdx.json; do
+            cosign sign-blob --yes --bundle "${sbom}.sigstore.json" "${sbom}"
+            cosign verify-blob \
+              --bundle "${sbom}.sigstore.json" \
+              --certificate-identity "${CERT_IDENTITY}" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              "${sbom}"
+          done
+
+      - name: Generate signed image build provenance
+        id: image-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-version: ${{ needs.preflight.outputs.version }}
+          push-to-registry: true
+          # GitHub artifact storage records are organization-only. The attestation is
+          # still pushed to the OCI registry for both organization and user owners.
+          create-storage-record: false
+
+      - name: Attest the SPDX image SBOM
+        id: image-spdx
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: release-assets/${{ matrix.component }}-${{ github.ref_name }}.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the CycloneDX image SBOM
+        id: image-cyclonedx
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: release-assets/${{ matrix.component }}-${{ github.ref_name }}.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Verify image provenance and both SBOM predicates
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          reference="oci://${IMAGE}@${DIGEST}"
+          gh attestation verify "${reference}" --repo "${GITHUB_REPOSITORY}"
+          gh attestation verify "${reference}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type "https://spdx.dev/Document/v2.3"
+          gh attestation verify "${reference}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --predicate-type "https://cyclonedx.org/bom"
+
+      - name: Write immutable image record and preserve attestation bundles
+        shell: bash
+        env:
+          COMPONENT: ${{ matrix.component }}
+          CYCLONEDX_ATTESTATION_BUNDLE: ${{ steps.image-cyclonedx.outputs.bundle-path }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          PROVENANCE_ATTESTATION_BUNDLE: ${{ steps.image-provenance.outputs.bundle-path }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          SPDX_ATTESTATION_BUNDLE: ${{ steps.image-spdx.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          python scripts/release/release_contract.py image-record \
+            --component "${COMPONENT}" \
+            --dockerfile "${DOCKERFILE}" \
+            --target "${TARGET}" \
+            --image "${IMAGE}" \
+            --digest "${DIGEST}" \
+            --tag "${TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${SOURCE_SHA}" \
+            --output "release-assets/${COMPONENT}-${TAG}.image.json"
+          cp "${PROVENANCE_ATTESTATION_BUNDLE}" \
+            "release-assets/${COMPONENT}-${TAG}.provenance.attestation.sigstore.json"
+          cp "${SPDX_ATTESTATION_BUNDLE}" \
+            "release-assets/${COMPONENT}-${TAG}.spdx.attestation.sigstore.json"
+          cp "${CYCLONEDX_ATTESTATION_BUNDLE}" \
+            "release-assets/${COMPONENT}-${TAG}.cdx.attestation.sigstore.json"
+
+      - name: Upload verified image release material
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-image-${{ matrix.component }}-${{ github.ref_name }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Record workflow-artifact digest
+        shell: bash
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: test -n "${ARTIFACT_DIGEST}"
+
+  publish-release:
+    name: Assemble and publish the immutable GitHub release
+    needs:
+      - preflight
+      - python-distributions
+      - container-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      attestations: write # Persist manifest and checksum provenance attestations.
+      contents: write # Create, attach, publish, and verify the immutable release.
+      id-token: write # Mint short-lived Sigstore certificates through GitHub OIDC.
+    steps:
+      - name: Check out the approved tag source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download only release material from this workflow
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*-${{ github.ref_name }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Assemble the content-addressed release manifest
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+          WORKFLOW_RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python scripts/release/release_contract.py manifest \
+            --assets release-assets \
+            --tag "${TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${SOURCE_SHA}" \
+            --workflow-run "${WORKFLOW_RUN}" \
+            --output release-assets/release-manifest.json
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Sign and verify the release manifest
+        shell: bash
+        env:
+          CERT_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle release-assets/release-manifest.json.sigstore.json \
+            release-assets/release-manifest.json
+          cosign verify-blob \
+            --bundle release-assets/release-manifest.json.sigstore.json \
+            --certificate-identity "${CERT_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            release-assets/release-manifest.json
+
+      - name: Attest the release manifest provenance
+        id: manifest-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-assets/release-manifest.json
+
+      - name: Generate, sign, and verify complete checksums
+        shell: bash
+        env:
+          CERT_IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}
+          MANIFEST_PROVENANCE_BUNDLE: ${{ steps.manifest-provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "${MANIFEST_PROVENANCE_BUNDLE}" \
+            release-assets/release-manifest.provenance.attestation.sigstore.json
+          python scripts/release/release_contract.py checksums \
+            --directory release-assets \
+            --output release-assets/SHA256SUMS
+          cosign sign-blob --yes \
+            --bundle release-assets/SHA256SUMS.sigstore.json \
+            release-assets/SHA256SUMS
+          cosign verify-blob \
+            --bundle release-assets/SHA256SUMS.sigstore.json \
+            --certificate-identity "${CERT_IDENTITY}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            release-assets/SHA256SUMS
+
+      - name: Attest the checksum manifest provenance
+        id: checksum-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-assets/SHA256SUMS
+
+      - name: Revalidate every assembled asset and the signed tag
+        shell: bash
+        env:
+          CHECKSUM_PROVENANCE_BUNDLE: ${{ steps.checksum-provenance.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cp "${CHECKSUM_PROVENANCE_BUNDLE}" \
+            release-assets/SHA256SUMS.provenance.attestation.sigstore.json
+          python scripts/release/release_contract.py verify-assets \
+            --assets release-assets \
+            --tag "${TAG}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --source-sha "${SOURCE_SHA}"
+          gh attestation verify release-assets/release-manifest.json \
+            --repo "${GITHUB_REPOSITORY}"
+          gh attestation verify release-assets/SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}"
+          tag_ref="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")"
+          tag_object_sha="$(jq -er '.object | select(.type == "tag") | .sha' <<<"${tag_ref}")"
+          gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" \
+            --jq ".object.sha == \"${SOURCE_SHA}\" and .verification.verified == true and .verification.reason == \"valid\"" \
+            | grep -Fx true
+
+      - name: Create a draft, attach all assets, and publish once
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          {
+            echo "CorpusKit ${TAG}"
+            echo
+            echo "Immutable source: ${SOURCE_SHA}"
+            echo
+            echo "All runnable images must be consumed by digest from release-manifest.json."
+            echo "Verify SHA256SUMS, Sigstore bundles, and GitHub attestations before use."
+            echo "Production promotion remains subject to the documented staging, GPU, provider, IdP, accessibility, and operations gates."
+          } >release-notes.md
+          release_args=("${TAG}" --verify-tag --draft --title "CorpusKit ${TAG}" --notes-file release-notes.md)
+          if [[ "${PRERELEASE}" == true ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "${release_args[@]}" --repo "${GITHUB_REPOSITORY}"
+          gh release upload "${TAG}" release-assets/* --repo "${GITHUB_REPOSITORY}"
+          gh release edit "${TAG}" --draft=false --repo "${GITHUB_REPOSITORY}"
+
+      - name: Verify immutable release and every uploaded asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release verify "${TAG}" --repo "${GITHUB_REPOSITORY}"
+          for asset in release-assets/*; do
+            gh release verify-asset "${TAG}" "${asset}" --repo "${GITHUB_REPOSITORY}"
+          done

@@ -1,0 +1,235 @@
+name: Qualified live provider acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full reviewed release-candidate commit SHA
+        required: true
+        type: string
+      provider:
+        description: Allowlisted LiteLLM provider namespace
+        required: true
+        type: string
+      model:
+        description: Exact provider-namespaced model (provider/model)
+        required: true
+        type: string
+      input_cost_per_million_usd:
+        description: Current input-token price reviewed for this exact model
+        required: true
+        type: string
+      output_cost_per_million_usd:
+        description: Current output-token price reviewed for this exact model
+        required: true
+        type: string
+
+# The workflow needs only checkout access. The environment supplies the one live secret.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Exact candidate against one protected provider
+    environment: qualified-provider
+    runs-on: [self-hosted, linux, x64, corpuskit-qualified, provider-egress]
+    timeout-minutes: 20
+    env:
+      EGRESS_NETWORK: corpuskit-qualified-provider-egress
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact clean source identity
+        id: source
+        shell: bash
+        env:
+          REQUESTED_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${REQUESTED_CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${REQUESTED_CANDIDATE_SHA}" != "0000000000000000000000000000000000000000"
+          actual_sha="$(git rev-parse HEAD)"
+          test "${actual_sha}" = "${REQUESTED_CANDIDATE_SHA}"
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          printf 'sha=%s\n' "${actual_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify the operator-controlled egress network
+        shell: bash
+        run: |
+          set -euo pipefail
+          policy="$(docker network inspect \
+            --format '{{ index .Labels "corpuskit.egress-policy" }}' \
+            "${EGRESS_NETWORK}")"
+          test "${policy}" = "qualified-provider"
+
+      - name: Build and identify the exact production provider worker
+        id: image
+        shell: bash
+        env:
+          QUALIFIED_CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image_tag="corpuskit-worker-external-provider:qualified-${QUALIFIED_CANDIDATE_SHA}"
+          docker build --file docker/worker.Dockerfile \
+            --target worker-external-provider \
+            --tag "${image_tag}" .
+          test "$(docker image inspect --format '{{.Config.User}}' "${image_tag}")" = "10001:10001"
+          image_digest="$(docker image inspect --format '{{.Id}}' "${image_tag}")"
+          [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'tag=%s\n' "${image_tag}" >> "${GITHUB_OUTPUT}"
+          printf 'digest=%s\n' "${image_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare an isolated evidence directory
+        id: evidence
+        shell: bash
+        env:
+          QUALIFIED_CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          evidence_root="${RUNNER_TEMP}/corpuskit-qualified-provider-${QUALIFIED_CANDIDATE_SHA}"
+          test ! -e "${evidence_root}"
+          install -d -m 0777 "${evidence_root}"
+          printf 'path=%s\n' "${evidence_root}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run one budget-capped live provider qualification
+        shell: bash
+        env:
+          # The secret is never a workflow input, command-line value, or retained artifact field.
+          QUALIFIED_PROVIDER_API_KEY: ${{ secrets.QUALIFIED_PROVIDER_API_KEY }}
+          QUALIFIED_CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+          QUALIFIED_WORKER_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          QUALIFIED_WORKER_IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          QUALIFIED_EVIDENCE_ROOT: ${{ steps.evidence.outputs.path }}
+          QUALIFIED_PROVIDER: ${{ inputs.provider }}
+          QUALIFIED_MODEL: ${{ inputs.model }}
+          QUALIFIED_INPUT_PRICE: ${{ inputs.input_cost_per_million_usd }}
+          QUALIFIED_OUTPUT_PRICE: ${{ inputs.output_cost_per_million_usd }}
+        run: |
+          set -euo pipefail
+          test -n "${QUALIFIED_PROVIDER_API_KEY}"
+          cidfile="${RUNNER_TEMP}/corpuskit-qualified-provider.cid"
+          test ! -e "${cidfile}"
+          cleanup_container() {
+            if test -f "${cidfile}"; then
+              container_id="$(tr -d '\r\n' < "${cidfile}")"
+              if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]]; then
+                docker container rm --force "${container_id}" >/dev/null 2>&1 || true
+              fi
+              rm -f -- "${cidfile}"
+            fi
+          }
+          trap cleanup_container EXIT
+          timeout --signal=TERM --kill-after=5s 40s \
+            docker run --rm --cidfile "${cidfile}" \
+              --user 10001:10001 \
+              --read-only \
+              --network "${EGRESS_NETWORK}" \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --pids-limit 256 \
+              --memory 2g \
+              --cpus 2 \
+              --tmpfs /tmp:rw,noexec,nodev,nosuid,size=128m,uid=10001,gid=10001,mode=0700 \
+              --tmpfs /home/corpuskit:rw,noexec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700 \
+              --tmpfs /run/corpuskit-espeak:rw,exec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700 \
+              --mount "type=bind,source=${PWD}/scripts/provider,target=/acceptance,readonly" \
+              --mount "type=bind,source=${QUALIFIED_EVIDENCE_ROOT},target=/evidence" \
+              --env QUALIFIED_PROVIDER_API_KEY \
+              --env CORPUSKIT_ACCEPTANCE_NETWORK=operator-allowlisted-provider-egress \
+              --env TMPDIR=/run/corpuskit-espeak \
+              --env XDG_CONFIG_HOME=/tmp/corpuskit-xdg \
+              --env LITELLM_LOG=ERROR \
+              --entrypoint python \
+              "${QUALIFIED_WORKER_IMAGE_TAG}" \
+              /acceptance/qualified_provider_acceptance.py run \
+                --candidate-sha "${QUALIFIED_CANDIDATE_SHA}" \
+                --worker-image-digest "${QUALIFIED_WORKER_IMAGE_DIGEST}" \
+                --provider "${QUALIFIED_PROVIDER}" \
+                --model "${QUALIFIED_MODEL}" \
+                --input-cost-per-million-usd "${QUALIFIED_INPUT_PRICE}" \
+                --output-cost-per-million-usd "${QUALIFIED_OUTPUT_PRICE}" \
+                --output /evidence/provider.json
+          cleanup_container
+          trap - EXIT
+
+      - name: Revalidate the retained artifact without network or credentials
+        shell: bash
+        env:
+          QUALIFIED_CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+          QUALIFIED_WORKER_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          QUALIFIED_WORKER_IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          QUALIFIED_EVIDENCE_ROOT: ${{ steps.evidence.outputs.path }}
+          QUALIFIED_PROVIDER: ${{ inputs.provider }}
+          QUALIFIED_MODEL: ${{ inputs.model }}
+          QUALIFIED_INPUT_PRICE: ${{ inputs.input_cost_per_million_usd }}
+          QUALIFIED_OUTPUT_PRICE: ${{ inputs.output_cost_per_million_usd }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --user 10001:10001 \
+            --read-only \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --pids-limit 64 \
+            --memory 1g \
+            --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nodev,nosuid,size=64m,uid=10001,gid=10001,mode=0700 \
+            --mount "type=bind,source=${PWD}/scripts/provider,target=/acceptance,readonly" \
+            --mount "type=bind,source=${QUALIFIED_EVIDENCE_ROOT},target=/evidence,readonly" \
+            --entrypoint python \
+            "${QUALIFIED_WORKER_IMAGE_TAG}" \
+            /acceptance/qualified_provider_acceptance.py verify \
+              --candidate-sha "${QUALIFIED_CANDIDATE_SHA}" \
+              --worker-image-digest "${QUALIFIED_WORKER_IMAGE_DIGEST}" \
+              --provider "${QUALIFIED_PROVIDER}" \
+              --model "${QUALIFIED_MODEL}" \
+              --input-cost-per-million-usd "${QUALIFIED_INPUT_PRICE}" \
+              --output-cost-per-million-usd "${QUALIFIED_OUTPUT_PRICE}" \
+              --input /evidence/provider.json
+
+      - name: Upload the redacted exact-candidate evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualified-provider-${{ steps.source.outputs.sha }}
+          path: ${{ steps.evidence.outputs.path }}/provider.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove ephemeral qualification state
+        if: ${{ always() }}
+        shell: bash
+        env:
+          QUALIFIED_CANDIDATE_SHA: ${{ steps.source.outputs.sha }}
+          QUALIFIED_WORKER_IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          QUALIFIED_EVIDENCE_ROOT: ${{ steps.evidence.outputs.path }}
+        run: |
+          set -euo pipefail
+          cidfile="${RUNNER_TEMP}/corpuskit-qualified-provider.cid"
+          if test -f "${cidfile}"; then
+            container_id="$(tr -d '\r\n' < "${cidfile}")"
+            if [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]]; then
+              docker container rm --force "${container_id}" >/dev/null 2>&1 || true
+            fi
+            rm -f -- "${cidfile}"
+          fi
+          if test -n "${QUALIFIED_EVIDENCE_ROOT:-}"; then
+            test "${QUALIFIED_EVIDENCE_ROOT}" = \
+              "${RUNNER_TEMP}/corpuskit-qualified-provider-${QUALIFIED_CANDIDATE_SHA}"
+            rm -f -- "${QUALIFIED_EVIDENCE_ROOT}/provider.json"
+            rmdir -- "${QUALIFIED_EVIDENCE_ROOT}" 2>/dev/null || true
+          fi
+          if test -n "${QUALIFIED_WORKER_IMAGE_TAG:-}"; then
+            docker image rm "${QUALIFIED_WORKER_IMAGE_TAG}" >/dev/null 2>&1 || true
+          fi
