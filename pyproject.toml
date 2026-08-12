@@ -28,7 +28,7 @@ dependencies = [
   "pyjwt[crypto]>=2.10,<3",
   "python-multipart>=0.0.20,<1",
   "sqlalchemy[asyncio]>=2.0.43,<3",
-  "structlog>=25.4,<26",
+  "structlog>=25.4,<27",
   "temporalio>=1.16,<2",
   "uvicorn[standard]>=0.35,<1",
 ]
