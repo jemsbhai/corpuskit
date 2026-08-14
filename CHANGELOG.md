@@ -5,6 +5,12 @@ All notable changes to CorpusKit will be documented here. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Append-only corpus version creation from manual sentences or bounded UTF-8 TXT, CSV, and JSON
+  imports, with parent lineage, atomic quota accounting, audit evidence, API contracts, and an
+  accessible project-workbench flow.
+
 ## [0.1.0-alpha.1] - 2026-08-12
 
 ### Added

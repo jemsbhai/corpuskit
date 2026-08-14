@@ -30,6 +30,14 @@ const version = {
   corpusgen_version: "0.1.7",
   created_at: "2026-08-11T00:00:00Z",
 };
+const versionTwo = {
+  ...version,
+  id: "00000000-0000-4000-8000-000000000104",
+  parent_version_id: version.id,
+  version_number: 2,
+  language: "en-gb",
+  content_sha256: "b".repeat(64),
+};
 
 test("manual corpus workflow is keyboard-accessible and exports are downloadable", async ({
   page,
@@ -146,4 +154,80 @@ test("CSV import requires an explicit text column", async ({ page }) => {
   await expect.poll(() => uploadBody).toContain("utterance");
   expect(uploadBody).toContain("seed.csv");
   expect(uploadBody).toContain("text/csv");
+});
+
+test("manual corpus version creation refreshes and selects immutable history", async ({
+  page,
+}) => {
+  let submitted: unknown = null;
+  let appended = false;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/v1/auth/me" && request.method() === "GET") {
+      await route.fulfill({ json: principal });
+    } else if (path === "/api/v1/projects" && request.method() === "GET") {
+      await route.fulfill({ json: [project] });
+    } else if (
+      path.endsWith(`/projects/${project.id}/corpora`) &&
+      request.method() === "GET"
+    ) {
+      await route.fulfill({ json: [corpus] });
+    } else if (
+      path.endsWith(`/corpora/${corpus.id}/versions`) &&
+      request.method() === "POST"
+    ) {
+      submitted = request.postDataJSON();
+      appended = true;
+      await route.fulfill({ status: 201, json: versionTwo });
+    } else if (
+      path.endsWith(`/corpora/${corpus.id}/versions`) &&
+      request.method() === "GET"
+    ) {
+      await route.fulfill({
+        json: appended ? [version, versionTwo] : [version],
+      });
+    } else if (path.endsWith(`/versions/${version.id}/sentences`)) {
+      await route.fulfill({
+        json: [
+          { ordinal: 0, original_text: "First", normalized_text: "First" },
+        ],
+      });
+    } else if (path.endsWith(`/versions/${versionTwo.id}/sentences`)) {
+      await route.fulfill({
+        json: [
+          {
+            ordinal: 0,
+            original_text: " Revised ",
+            normalized_text: "Revised",
+          },
+        ],
+      });
+    } else {
+      await route.fulfill({ status: 404 });
+    }
+  });
+
+  await page.goto("/projects");
+  await page.getByRole("button", { name: /Demo project/ }).click();
+  await page.getByRole("button", { name: /Unicode seed/ }).click();
+  await page.getByLabel("Version eSpeak language").fill("en-gb");
+  await page.getByLabel("Version sentences").fill(" Revised ");
+  await page.getByRole("button", { name: "Create version" }).click();
+
+  await expect
+    .poll(() => submitted)
+    .toEqual({
+      language: "en-gb",
+      sentences: [" Revised "],
+    });
+  await expect(page.getByRole("button", { name: /Version 2/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(
+    page.getByRole("table", { name: /Normalized sentences/ }),
+  ).toContainText("Revised");
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
 });

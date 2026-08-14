@@ -8,7 +8,7 @@ if (!baseURL)
 
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: "demo-live.spec.ts",
+  testMatch: ["demo-live.spec.ts", "projects-live.spec.ts"],
   fullyParallel: false,
   forbidOnly: true,
   retries: 0,

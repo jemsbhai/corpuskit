@@ -242,6 +242,72 @@ class ProjectService:
         return corpus, version
 
     @staticmethod
+    async def create_version(
+        session: AsyncSession,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        project_id: UUID,
+        corpus_id: UUID,
+        prepared: PreparedCorpus,
+        operation: str,
+    ) -> CorpusVersion:
+        """Append one immutable version while serializing writers per corpus."""
+
+        await ProjectService._require_project(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            operation=operation,
+            for_update=True,
+        )
+        corpus = await ProjectService._require_corpus(
+            session,
+            organization_id=organization_id,
+            project_id=project_id,
+            corpus_id=corpus_id,
+            operation=operation,
+            for_update=True,
+        )
+        latest = await session.scalar(
+            select(CorpusVersion)
+            .where(
+                CorpusVersion.organization_id == organization_id,
+                CorpusVersion.corpus_id == corpus.id,
+            )
+            .order_by(CorpusVersion.version_number.desc(), CorpusVersion.id.desc())
+            .limit(1)
+        )
+        if latest is None:
+            raise ResourceConflictError(operation)
+
+        version = CorpusVersion(
+            organization_id=organization_id,
+            corpus_id=corpus.id,
+            parent_version_id=latest.id,
+            created_by=user_id,
+            version_number=latest.version_number + 1,
+            language=prepared.language,
+            sentence_count=len(prepared.sentences),
+            content_sha256=prepared.content_sha256,
+        )
+        version.sentences = [
+            Sentence(
+                organization_id=organization_id,
+                ordinal=sentence.ordinal,
+                original_text=sentence.original_text,
+                normalized_text=sentence.normalized_text,
+            )
+            for sentence in prepared.sentences
+        ]
+        session.add(version)
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise ResourceConflictError(operation) from exc
+        return version
+
+    @staticmethod
     async def _require_project(
         session: AsyncSession,
         *,
@@ -256,7 +322,7 @@ class ProjectService:
             Project.lifecycle_state == ProjectLifecycle.ACTIVE,
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update(of=Project)
         project = await session.scalar(statement)
         if project is None:
             raise ResourceNotFoundError(operation)
@@ -270,6 +336,7 @@ class ProjectService:
         project_id: UUID,
         corpus_id: UUID,
         operation: str,
+        for_update: bool = False,
     ) -> Corpus:
         statement = (
             select(Corpus)
@@ -282,6 +349,8 @@ class ProjectService:
                 Project.lifecycle_state == ProjectLifecycle.ACTIVE,
             )
         )
+        if for_update:
+            statement = statement.with_for_update()
         corpus = await session.scalar(statement)
         if corpus is None:
             raise ResourceNotFoundError(operation)

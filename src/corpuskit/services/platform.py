@@ -508,12 +508,13 @@ class QuotaManager:
         *,
         organization_id: UUID,
         sentence_count: int,
+        operation: str = "corpus.create",
     ) -> None:
         if sentence_count <= 0:
             raise ValueError("corpus sentence usage must be positive")
         policy, usage = await QuotaManager._locked(session, organization_id)
         if usage.corpus_sentences + sentence_count > policy.max_corpus_sentences:
-            raise QuotaExceededError("corpus.create")
+            raise QuotaExceededError(operation)
         usage.corpus_sentences += sentence_count
         usage.updated_at = datetime.now(UTC)
         await session.flush()

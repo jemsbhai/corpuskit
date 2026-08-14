@@ -1,11 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test.skip(
-  !process.env.CORPUSKIT_LIVE_STACK,
-  "set CORPUSKIT_LIVE_STACK=1 for real API acceptance",
-);
-
-test("real stack creates a tenant project and immutable manual corpus", async ({
+test("real stack creates a corpus, appends a version, and preserves history", async ({
   page,
 }) => {
   const suffix = `${Date.now()}-${test.info().project.name}`;
@@ -21,6 +16,23 @@ test("real stack creates a tenant project and immutable manual corpus", async ({
   await page.getByLabel("Corpus name").fill(corpusName);
   await page.getByLabel("Sentences one per line").fill("Héllo world\n你好世界");
   await page.getByRole("button", { name: "Create corpus" }).click();
+  await expect(
+    page.getByRole("table", { name: /Normalized sentences/ }),
+  ).toContainText("你好世界");
+  await page.getByLabel("Version eSpeak language").fill("en-gb");
+  await page
+    .getByLabel("Version sentences")
+    .fill("Revised hello world\nA second immutable sentence");
+  await page.getByRole("button", { name: "Create version" }).click();
+  await expect(page.getByRole("button", { name: /Version 2/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(
+    page.getByRole("table", { name: /Normalized sentences/ }),
+  ).toContainText("A second immutable sentence");
+
+  await page.getByRole("button", { name: /Version 1/ }).click();
   await expect(
     page.getByRole("table", { name: /Normalized sentences/ }),
   ).toContainText("你好世界");

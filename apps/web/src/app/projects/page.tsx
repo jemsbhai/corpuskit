@@ -5,7 +5,7 @@ import { ProjectWorkbench } from "@/components/project-workbench";
 export const metadata: Metadata = {
   title: "Project workspaces",
   description:
-    "Create projects and import, inspect, and export immutable speech corpora.",
+    "Create projects and build, inspect, and export immutable speech corpus histories.",
 };
 
 export default function ProjectsPage() {
@@ -21,14 +21,14 @@ export default function ProjectsPage() {
         <div>
           <p>
             Build a reproducible corpus from manual sentences or a bounded UTF-8
-            file, then inspect its immutable initial version and verified
-            exports.
+            file, add immutable successor versions, then inspect any snapshot
+            and its verified exports.
           </p>
           <p className="honesty-note">
-            This release creates and reads projects and version-1 corpora, and
-            owners/admins can request retention-governed project deletion with
-            exact confirmation. Project updates, individual corpus deletion, and
-            later corpus versions are not yet available.
+            Owners, admins, and editors can create corpora and later immutable
+            versions. Owners/admins can request retention-governed project
+            deletion with exact confirmation. Project updates and individual
+            corpus deletion are not yet available.
           </p>
         </div>
       </header>

@@ -9,16 +9,22 @@ function patterns(value: unknown): readonly unknown[] {
 describe("Playwright suite boundaries", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("keeps the real-stack demo out of the standard mocked browser matrix", () => {
-    expect(patterns(standardConfig.testIgnore)).toContain(
-      "**/demo-live.spec.ts",
+  it("keeps real-stack acceptance out of the standard mocked browser matrix", () => {
+    expect(patterns(standardConfig.testIgnore)).toEqual(
+      expect.arrayContaining([
+        "**/demo-live.spec.ts",
+        "**/projects-live.spec.ts",
+      ]),
     );
   });
 
-  it("selects only the real-stack demo in the explicit live configuration", async () => {
+  it("selects the demo and project-history real-stack acceptance", async () => {
     vi.stubEnv("CORPUSKIT_LIVE_BASE_URL", "http://127.0.0.1:3000");
     const { default: liveConfig } = await import("../playwright.live.config");
 
-    expect(liveConfig.testMatch).toBe("demo-live.spec.ts");
+    expect(patterns(liveConfig.testMatch)).toEqual([
+      "demo-live.spec.ts",
+      "projects-live.spec.ts",
+    ]);
   });
 });

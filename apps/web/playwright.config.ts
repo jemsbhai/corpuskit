@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  testIgnore: ["**/demo-live.spec.ts"],
+  testIgnore: ["**/demo-live.spec.ts", "**/projects-live.spec.ts"],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   // Flaky acceptance checks must fail visibly; CI does not conceal them with retries.

@@ -260,6 +260,19 @@ def test_audit_metadata_is_allowlisted_nonfinite_safe_and_bounded() -> None:
             AuditAction.RUN_SUCCEEDED,
             {"kind": "x" * 2_100},
         )
+    assert (
+        normalize_audit_metadata(
+            AuditAction.CORPUS_VERSION_CREATED,
+            {
+                "content_sha256": "a" * 64,
+                "language": "en-us",
+                "parent_version_id": "00000000-0000-4000-8000-000000000001",
+                "sentence_count": 2,
+                "version_number": 3,
+            },
+        )["version_number"]
+        == 3
+    )
 
 
 def test_audit_hash_is_canonical_across_sqlite_timezone_round_trip() -> None:

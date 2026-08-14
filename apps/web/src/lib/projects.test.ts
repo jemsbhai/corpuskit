@@ -10,9 +10,11 @@ import {
   ProjectContractError,
   corpusExportHref,
   createManualCorpus,
+  createManualVersion,
   createProject,
   getCurrentPrincipal,
   importCorpus,
+  importCorpusVersion,
   listAllSentences,
   listCorpora,
   listProjects,
@@ -239,6 +241,59 @@ describe("project API client", () => {
     });
     const form = (fetchMock.mock.calls[0]?.[1] as RequestInit).body as FormData;
     expect(form.has("text_column")).toBe(false);
+  });
+
+  it("appends manual and file-backed versions to encoded corpus paths", async () => {
+    const second = {
+      ...version,
+      id: "version-2",
+      parent_version_id: version.id,
+      version_number: 2,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(second, { status: 201 }))
+      .mockResolvedValueOnce(Response.json(second, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createManualVersion("project / 1", "corpus / 1", {
+        language: "en-gb",
+        sentences: ["Second"],
+      }),
+    ).resolves.toEqual(second);
+    const [manualPath, manualInit] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit,
+    ];
+    expect(manualPath).toContain(
+      "/projects/project%20%2F%201/corpora/corpus%20%2F%201/versions",
+    );
+    expect(manualInit.body).toBe(
+      JSON.stringify({ language: "en-gb", sentences: ["Second"] }),
+    );
+
+    const file = new File(["text\nSecond\n"], "second.csv", {
+      type: "text/csv",
+    });
+    await expect(
+      importCorpusVersion("project / 1", "corpus / 1", {
+        language: "en-us",
+        format: "csv",
+        textColumn: "text",
+        file,
+      }),
+    ).resolves.toEqual(second);
+    const [filePath, fileInit] = fetchMock.mock.calls[1] as [
+      string,
+      RequestInit,
+    ];
+    expect(filePath).toContain("/versions/imports");
+    const form = fileInit.body as FormData;
+    expect(form.get("language")).toBe("en-us");
+    expect(form.get("text_column")).toBe("text");
+    expect(form.get("file")).toBe(file);
+    expect(form.has("name")).toBe(false);
   });
 
   it("normalizes safe API errors without leaking malformed bodies", async () => {

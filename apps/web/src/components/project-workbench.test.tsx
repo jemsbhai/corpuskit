@@ -12,9 +12,11 @@ import { ProjectWorkbench } from "./project-workbench";
 import { ProjectProvider } from "./project-context";
 import {
   createManualCorpus,
+  createManualVersion,
   createProject,
   getCurrentPrincipal,
   importCorpus,
+  importCorpusVersion,
   listCorpora,
   listProjects,
   listSentences,
@@ -27,9 +29,11 @@ vi.mock("@/lib/projects", async (importOriginal) => {
   return {
     ...original,
     createManualCorpus: vi.fn(),
+    createManualVersion: vi.fn(),
     createProject: vi.fn(),
     getCurrentPrincipal: vi.fn(),
     importCorpus: vi.fn(),
+    importCorpusVersion: vi.fn(),
     listCorpora: vi.fn(),
     listProjects: vi.fn(),
     listSentences: vi.fn(),
@@ -192,11 +196,15 @@ describe("ProjectWorkbench", () => {
 
   it("creates a manual corpus then exposes digest, sentences, and all exports", async () => {
     const user = userEvent.setup();
+    let corpusCreated = false;
     vi.mocked(listProjects).mockResolvedValue([project]);
-    vi.mocked(createManualCorpus).mockResolvedValue({ corpus, version });
-    vi.mocked(listCorpora)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([corpus]);
+    vi.mocked(createManualCorpus).mockImplementation(async () => {
+      corpusCreated = true;
+      return { corpus, version };
+    });
+    vi.mocked(listCorpora).mockImplementation(async () =>
+      corpusCreated ? [corpus] : [],
+    );
     vi.mocked(listVersions).mockResolvedValue([version]);
     vi.mocked(listSentences).mockResolvedValue([
       { ordinal: 0, original_text: "  Héllo  ", normalized_text: "Héllo" },
@@ -322,9 +330,10 @@ describe("ProjectWorkbench", () => {
   it("browses multiple immutable versions and sanitizes read failures", async () => {
     const user = userEvent.setup();
     let rejectVersionTwo = false;
+    const latestVersion = { ...versionTwo, language: "fr-fr" };
     vi.mocked(listProjects).mockResolvedValue([project]);
     vi.mocked(listCorpora).mockResolvedValue([corpus]);
-    vi.mocked(listVersions).mockResolvedValue([version, versionTwo]);
+    vi.mocked(listVersions).mockResolvedValue([version, latestVersion]);
     vi.mocked(listSentences).mockImplementation(
       async (_projectId, _corpusId, versionId) => {
         if (versionId === versionTwo.id) {
@@ -360,6 +369,9 @@ describe("ProjectWorkbench", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Version 1 loaded",
     );
+    expect(screen.getByLabelText("Version eSpeak language")).toHaveValue(
+      "fr-fr",
+    );
     expect(screen.getAllByText("First")).toHaveLength(2);
     rejectVersionTwo = true;
     await user.click(screen.getByRole("button", { name: /Version 2/ }));
@@ -367,6 +379,311 @@ describe("ProjectWorkbench", () => {
       "temporarily unavailable",
     );
     expect(screen.getByRole("alert")).not.toHaveTextContent("database");
+  });
+
+  it("creates a manual successor then refreshes and selects it", async () => {
+    const user = userEvent.setup();
+    let created = false;
+    const createdVersion = {
+      ...versionTwo,
+      language: "fr-fr",
+      sentence_count: 2,
+    };
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(listCorpora).mockResolvedValue([corpus]);
+    vi.mocked(listVersions).mockImplementation(async () =>
+      created ? [version, createdVersion] : [version],
+    );
+    vi.mocked(listSentences).mockImplementation(
+      async (_projectId, _corpusId, versionId) =>
+        versionId === createdVersion.id
+          ? [
+              {
+                ordinal: 0,
+                original_text: " Première ",
+                normalized_text: "Première",
+              },
+              {
+                ordinal: 1,
+                original_text: "Deuxième",
+                normalized_text: "Deuxième",
+              },
+            ]
+          : [
+              {
+                ordinal: 0,
+                original_text: "First",
+                normalized_text: "First",
+              },
+            ],
+    );
+    vi.mocked(createManualVersion).mockImplementation(async () => {
+      created = true;
+      return createdVersion;
+    });
+    renderWorkbench();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Demo project/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Unicode seed/ }),
+    );
+    const language = await screen.findByLabelText("Version eSpeak language");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Create version" }),
+      ).toBeEnabled(),
+    );
+    await user.clear(language);
+    await user.type(language, "fr-fr");
+    fireEvent.change(screen.getByLabelText(/Version sentences/), {
+      target: { value: " Première \n\nDeuxième" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create version" }));
+
+    await waitFor(() =>
+      expect(createManualVersion).toHaveBeenCalledWith(project.id, corpus.id, {
+        language: "fr-fr",
+        sentences: [" Première ", "", "Deuxième"],
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "version 2 created and selected",
+    );
+    const createdButton = screen.getByRole("button", { name: /Version 2/ });
+    expect(createdButton).toHaveAttribute("aria-pressed", "true");
+    expect(createdButton).toHaveFocus();
+    expect(screen.getByText(createdVersion.content_sha256)).toBeVisible();
+    expect(screen.getByLabelText(/Version sentences/)).toHaveValue("");
+    expect(screen.getAllByText("Deuxième")).toHaveLength(2);
+  });
+
+  it("reports a committed version when its follow-up refresh fails", async () => {
+    const user = userEvent.setup();
+    let created = false;
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(listCorpora).mockResolvedValue([corpus]);
+    vi.mocked(listVersions).mockImplementation(async () => {
+      if (created) throw new Error("replica unavailable");
+      return [version];
+    });
+    vi.mocked(listSentences).mockResolvedValue([
+      { ordinal: 0, original_text: "First", normalized_text: "First" },
+    ]);
+    vi.mocked(createManualVersion).mockImplementation(async () => {
+      created = true;
+      return versionTwo;
+    });
+    renderWorkbench();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Demo project/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Unicode seed/ }),
+    );
+    await user.type(
+      await screen.findByLabelText(/Version sentences/),
+      "Second",
+    );
+    await user.click(screen.getByRole("button", { name: "Create version" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "version 2 was created, but its sentences could not be refreshed",
+    );
+    const recovered = screen.getByRole("button", { name: /Version 2/ });
+    expect(recovered).toHaveAttribute("aria-pressed", "true");
+    expect(recovered).toHaveFocus();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Version sentences/)).toHaveValue("");
+  });
+
+  it("does not apply an append response after the user selects another corpus", async () => {
+    const user = userEvent.setup();
+    const otherCorpus = {
+      ...corpus,
+      id: "corpus-2",
+      name: "Other corpus",
+    };
+    const otherVersion = {
+      ...version,
+      id: "other-version-1",
+      corpus_id: otherCorpus.id,
+      content_sha256: "c".repeat(64),
+    };
+    let appendResolved = false;
+    let staleRefreshAttempted = false;
+    let resolveAppend!: (value: typeof versionTwo) => void;
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(listCorpora).mockResolvedValue([corpus, otherCorpus]);
+    vi.mocked(listVersions).mockImplementation(async (_projectId, corpusId) => {
+      if (appendResolved && corpusId === corpus.id)
+        staleRefreshAttempted = true;
+      return corpusId === otherCorpus.id ? [otherVersion] : [version];
+    });
+    vi.mocked(listSentences).mockImplementation(
+      async (_projectId, corpusId) => [
+        {
+          ordinal: 0,
+          original_text: corpusId === otherCorpus.id ? "Other" : "First",
+          normalized_text: corpusId === otherCorpus.id ? "Other" : "First",
+        },
+      ],
+    );
+    vi.mocked(createManualVersion).mockReturnValue(
+      new Promise((resolve) => {
+        resolveAppend = resolve;
+      }),
+    );
+    renderWorkbench();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Demo project/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Unicode seed/ }),
+    );
+    await user.type(
+      await screen.findByLabelText(/Version sentences/),
+      "Second",
+    );
+    await user.click(screen.getByRole("button", { name: "Create version" }));
+    await waitFor(() => expect(createManualVersion).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: /Other corpus/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Other corpus/ }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(await screen.findByText(otherVersion.content_sha256)).toBeVisible();
+
+    appendResolved = true;
+    resolveAppend(versionTwo);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(staleRefreshAttempted).toBe(false);
+    expect(screen.getByText(otherVersion.content_sha256)).toBeVisible();
+    expect(
+      screen.queryByText(versionTwo.content_sha256),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Other corpus/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("lets an editor import a version file and clears it after selection", async () => {
+    const user = userEvent.setup();
+    let created = false;
+    vi.mocked(getCurrentPrincipal).mockResolvedValue({
+      subject: "editor-1",
+      organization_id: "00000000-0000-4000-8000-000000000001",
+      role: "editor",
+      display_name: "Editor",
+    });
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(listCorpora).mockResolvedValue([corpus]);
+    vi.mocked(listVersions).mockImplementation(async () =>
+      created ? [version, versionTwo] : [version],
+    );
+    vi.mocked(listSentences).mockResolvedValue([]);
+    vi.mocked(importCorpusVersion).mockImplementation(async () => {
+      created = true;
+      return versionTwo;
+    });
+    renderWorkbench();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Demo project/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Unicode seed/ }),
+    );
+    expect(
+      await screen.findByRole("form", {
+        name: "Create the next immutable version",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Delete project" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Create version" }),
+      ).toBeEnabled(),
+    );
+    await user.click(
+      screen.getByRole("radio", { name: "Version file import" }),
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Version file format"),
+      "csv",
+    );
+    await user.clear(screen.getByLabelText("Version CSV text column"));
+    await user.type(
+      screen.getByLabelText("Version CSV text column"),
+      "utterance",
+    );
+    const file = new File(["utterance\nSecond\n"], "version.csv", {
+      type: "text/csv",
+    });
+    const input = screen.getByLabelText(
+      "UTF-8 CSV version file",
+    ) as HTMLInputElement;
+    await user.upload(input, file);
+    expect(input.files?.[0]).toBe(file);
+    fireEvent.submit(input.closest("form")!);
+
+    await waitFor(() =>
+      expect(importCorpusVersion).toHaveBeenCalledWith(project.id, corpus.id, {
+        language: "en-us",
+        format: "csv",
+        textColumn: "utterance",
+        file,
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "version 2 created and selected",
+    );
+    expect(input.value).toBe("");
+    expect(input.files).toHaveLength(0);
+  });
+
+  it("keeps version creation read-only for viewers", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getCurrentPrincipal).mockResolvedValue({
+      subject: "viewer-1",
+      organization_id: "00000000-0000-4000-8000-000000000001",
+      role: "viewer",
+      display_name: null,
+    });
+    vi.mocked(listProjects).mockResolvedValue([project]);
+    vi.mocked(listCorpora).mockResolvedValue([corpus]);
+    vi.mocked(listVersions).mockResolvedValue([version]);
+    renderWorkbench();
+
+    await user.click(
+      await screen.findByRole("button", { name: /Demo project/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Unicode seed/ }),
+    );
+    expect(
+      await screen.findByText(
+        /Viewers can inspect and export immutable versions/,
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Create project" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create corpus" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create version" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Version eSpeak language")).toBeNull();
   });
 
   it("handles plural project loading, missing versions, and form failures", async () => {

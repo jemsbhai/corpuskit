@@ -26,7 +26,9 @@ from corpuskit.domain.workspaces import (
     CorpusExportFormat,
     CorpusFileFormat,
     CorpusUpload,
+    CorpusVersionUpload,
     ManualCorpusInput,
+    ManualCorpusVersionInput,
     ProjectDeletionInput,
     ProjectInput,
     ProjectLifecycle,
@@ -66,6 +68,22 @@ class ProjectWorkspaceApi(Protocol):
     async def import_corpus(
         self, actor: WorkspaceActor, project_id: UUID, upload: CorpusUpload
     ) -> CorpusCreation: ...
+
+    async def create_manual_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        request: ManualCorpusVersionInput,
+    ) -> VersionSnapshot: ...
+
+    async def import_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        upload: CorpusVersionUpload,
+    ) -> VersionSnapshot: ...
 
     async def list_corpora(
         self, actor: WorkspaceActor, project_id: UUID
@@ -244,6 +262,62 @@ def project_workspace_router(
         except ValidationError as exc:
             raise InvalidRequestError("corpus.import") from exc
         return await service.import_corpus(_actor(principal, http_request), project_id, upload)
+
+    @router.post(
+        "/projects/{project_id}/corpora/{corpus_id}/versions",
+        response_model=VersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_manual_version(
+        project_id: UUID,
+        corpus_id: UUID,
+        payload: Annotated[ManualCorpusVersionInput, Body()],
+        principal: WriterPrincipal,
+        http_request: Request,
+    ) -> VersionSnapshot:
+        return await service.create_manual_version(
+            _actor(principal, http_request),
+            project_id,
+            corpus_id,
+            payload,
+        )
+
+    @router.post(
+        "/projects/{project_id}/corpora/{corpus_id}/versions/imports",
+        response_model=VersionResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def import_version(
+        project_id: UUID,
+        corpus_id: UUID,
+        principal: WriterPrincipal,
+        file: Annotated[UploadFile, File()],
+        language: Annotated[str, Form(min_length=1, max_length=64)],
+        file_format: Annotated[CorpusFileFormat, Form(alias="format")],
+        http_request: Request,
+        text_column: Annotated[str | None, Form(min_length=1, max_length=160)] = None,
+    ) -> VersionSnapshot:
+        try:
+            content = await file.read(max_upload_bytes + 1)
+        finally:
+            await file.close()
+        try:
+            upload = CorpusVersionUpload(
+                language=language,
+                filename=file.filename or "",
+                content_type=file.content_type or "",
+                file_format=file_format,
+                content=content,
+                text_column=text_column,
+            )
+        except ValidationError as exc:
+            raise InvalidRequestError("corpus.version.import") from exc
+        return await service.import_version(
+            _actor(principal, http_request),
+            project_id,
+            corpus_id,
+            upload,
+        )
 
     @router.get(
         "/projects/{project_id}/corpora",

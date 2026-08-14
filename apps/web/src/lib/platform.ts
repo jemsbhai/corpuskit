@@ -66,6 +66,7 @@ const auditActions = [
   "project.deletion_requested",
   "project.purged",
   "corpus.created",
+  "corpus.version_created",
   "run.submitted",
   "run.cancellation_requested",
   "run.retry_submitted",

@@ -262,15 +262,16 @@ CorpusKit verification evidence for the implemented workflow slice is in:
 
 Project/corpus workspace persistence is a CorpusKit platform capability rather than a
 CorpusGen symbol, so it is not added to the 75-row engine parity count above. Create/list,
-bounded version-1 import, inspection, and deterministic export are wired through the API and
-the accessible `/projects` workbench. Unit, service-integration, BFF, and three-browser
-Playwright/axe acceptance tests cover the create/import/export slice. Owner/admin-only project
+bounded version-1 import, append-only manual/file version creation with server-owned parent
+lineage, inspection, and deterministic export are wired through the API and the accessible
+`/projects` workbench. Unit, service-integration, BFF, and three-browser Playwright/axe
+acceptance tests cover the create/import/version/export slice. Owner/admin-only project
 deletion now uses exact accessible confirmation, immediate fail-closed logical removal,
 transactional artifact tombstones, a configurable minimum 30-day retention, maintenance-only
 byte-first physical purge, exact quota release, and durable audit evidence. SQLite race tests and
 the opt-in real PostgreSQL RLS suite cover its service boundary. The migrated real-stack
-Playwright deletion flow remains a release gate. Update, individual corpus deletion, deletion
-undo, and later version creation remain unimplemented.
+Playwright deletion flow remains a release gate. Metadata update, individual corpus deletion,
+and deletion undo remain unimplemented.
 
 Tenant isolation, quota accounting, and audit evidence are also CorpusKit platform controls,
 not CorpusGen parity rows. Current evidence forces PostgreSQL RLS on every persisted resource

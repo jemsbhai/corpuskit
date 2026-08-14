@@ -50,6 +50,7 @@ class AuditAction(StrEnum):
     PROJECT_DELETION_REQUESTED = "project.deletion_requested"
     PROJECT_PURGED = "project.purged"
     CORPUS_CREATED = "corpus.created"
+    CORPUS_VERSION_CREATED = "corpus.version_created"
     RUN_SUBMITTED = "run.submitted"
     RUN_CANCELLATION_REQUESTED = "run.cancellation_requested"
     RUN_RETRY_SUBMITTED = "run.retry_submitted"
@@ -227,6 +228,15 @@ _AUDIT_METADATA_KEYS: dict[AuditAction, frozenset[str]] = {
     ),
     AuditAction.PROJECT_PURGED: frozenset({"artifact_count", "corpus_sentences"}),
     AuditAction.CORPUS_CREATED: frozenset({"content_sha256", "language", "sentence_count"}),
+    AuditAction.CORPUS_VERSION_CREATED: frozenset(
+        {
+            "content_sha256",
+            "language",
+            "parent_version_id",
+            "sentence_count",
+            "version_number",
+        }
+    ),
     AuditAction.RUN_SUBMITTED: frozenset({"attempt", "kind", "quota_class"}),
     AuditAction.RUN_CANCELLATION_REQUESTED: frozenset({"prior_state"}),
     AuditAction.RUN_RETRY_SUBMITTED: frozenset({"attempt", "kind", "quota_class", "source_run_id"}),

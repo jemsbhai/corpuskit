@@ -12,10 +12,18 @@ from corpuskit.api.app import create_app
 from corpuskit.auth import AuthRole, Principal
 from corpuskit.config import Settings
 from corpuskit.domain.capabilities import CapabilityReport
+from corpuskit.domain.errors import (
+    ApplicationError,
+    QuotaExceededError,
+    ResourceConflictError,
+    ResourceNotFoundError,
+)
 from corpuskit.domain.workspaces import (
     CorpusExportFormat,
     CorpusUpload,
+    CorpusVersionUpload,
     ManualCorpusInput,
+    ManualCorpusVersionInput,
     ProjectDeletionInput,
     ProjectInput,
     ProjectLifecycle,
@@ -55,6 +63,9 @@ class FakeWorkspaceService:
             NOW,
         )
         self.deletion_request: ProjectDeletionInput | None = None
+        self.version_request: ManualCorpusVersionInput | None = None
+        self.version_upload: CorpusVersionUpload | None = None
+        self.version_error: ApplicationError | None = None
 
     async def create_project(self, actor: WorkspaceActor, request: ProjectInput) -> ProjectSnapshot:
         self.actor = actor
@@ -95,6 +106,52 @@ class FakeWorkspaceService:
         assert project_id == PROJECT_ID
         self.upload = upload
         return CorpusCreation(self.corpus, self.version)
+
+    async def create_manual_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        request: ManualCorpusVersionInput,
+    ) -> VersionSnapshot:
+        self.actor = actor
+        assert (project_id, corpus_id) == (PROJECT_ID, CORPUS_ID)
+        if self.version_error is not None:
+            raise self.version_error
+        self.version_request = request
+        return VersionSnapshot(
+            UUID("00000000-0000-4000-8000-000000000024"),
+            CORPUS_ID,
+            VERSION_ID,
+            2,
+            request.language,
+            len(request.sentences),
+            "c" * 64,
+            "0.1.7",
+            NOW,
+        )
+
+    async def import_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        upload: CorpusVersionUpload,
+    ) -> VersionSnapshot:
+        self.actor = actor
+        assert (project_id, corpus_id) == (PROJECT_ID, CORPUS_ID)
+        self.version_upload = upload
+        return VersionSnapshot(
+            UUID("00000000-0000-4000-8000-000000000024"),
+            CORPUS_ID,
+            VERSION_ID,
+            2,
+            upload.language,
+            1,
+            "c" * 64,
+            "0.1.7",
+            NOW,
+        )
 
     async def list_corpora(
         self, actor: WorkspaceActor, project_id: UUID
@@ -292,6 +349,89 @@ async def test_file_import_is_multipart_typed_and_bounded(ready_report: Capabili
 
     assert rejected.status_code == 413
     assert bounded_service.upload is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [AuthRole.OWNER, AuthRole.ADMIN, AuthRole.EDITOR])
+async def test_manual_and_file_version_http_contracts(
+    ready_report: CapabilityReport,
+    role: AuthRole,
+) -> None:
+    service = FakeWorkspaceService()
+    base = f"/api/v1/projects/{PROJECT_ID}/corpora/{CORPUS_ID}/versions"
+    async with _client(ready_report, service, role=role) as client:
+        manual = await client.post(
+            base,
+            json={"language": "en-gb", "sentences": ["Second"]},
+            headers={"X-Request-ID": "manual-version"},
+        )
+        imported = await client.post(
+            f"{base}/imports",
+            data={"language": "fr-fr", "format": "txt"},
+            files={"file": ("second.txt", b"Deuxieme\n", "text/plain")},
+            headers={"X-Request-ID": "file-version"},
+        )
+
+    assert manual.status_code == 201
+    assert manual.json()["version_number"] == 2
+    assert manual.json()["parent_version_id"] == str(VERSION_ID)
+    assert service.version_request == ManualCorpusVersionInput(
+        language="en-gb", sentences=("Second",)
+    )
+    assert imported.status_code == 201
+    assert imported.json()["language"] == "fr-fr"
+    assert service.version_upload is not None
+    assert service.version_upload.filename == "second.txt"
+    assert service.version_upload.content == b"Deuxieme\n"
+    assert service.actor is not None
+    assert service.actor.request_id == "file-version"
+
+
+@pytest.mark.asyncio
+async def test_viewer_cannot_append_a_version(ready_report: CapabilityReport) -> None:
+    service = FakeWorkspaceService()
+    base = f"/api/v1/projects/{PROJECT_ID}/corpora/{CORPUS_ID}/versions"
+    async with _client(ready_report, service, role=AuthRole.VIEWER) as client:
+        manual = await client.post(
+            base,
+            json={"language": "en-us", "sentences": ["Denied"]},
+        )
+        imported = await client.post(
+            f"{base}/imports",
+            data={"language": "en-us", "format": "txt"},
+            files={"file": ("denied.txt", b"Denied\n", "text/plain")},
+        )
+
+    assert manual.status_code == 403
+    assert imported.status_code == 403
+    assert service.version_request is None
+    assert service.version_upload is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_code"),
+    [
+        (ResourceNotFoundError("corpus.version.create"), 404, "resource_not_found"),
+        (ResourceConflictError("corpus.version.create"), 409, "resource_conflict"),
+        (QuotaExceededError("corpus.version.create"), 429, "quota_exceeded"),
+    ],
+)
+async def test_version_errors_keep_stable_http_status_and_operation(
+    ready_report: CapabilityReport,
+    error: ApplicationError,
+    expected_status: int,
+    expected_code: str,
+) -> None:
+    service = FakeWorkspaceService()
+    service.version_error = error
+    base = f"/api/v1/projects/{PROJECT_ID}/corpora/{CORPUS_ID}/versions"
+    async with _client(ready_report, service, role=AuthRole.EDITOR) as client:
+        response = await client.post(base, json={"sentences": ["Second"]})
+
+    assert response.status_code == expected_status
+    assert response.json()["code"] == expected_code
+    assert response.json()["operation"] == "corpus.version.create"
 
 
 @pytest.mark.asyncio

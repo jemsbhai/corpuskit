@@ -115,7 +115,9 @@ a bounded server-owned `Retry-After`; it does not reveal usage from another orga
 Submission locks the tenant usage row and creates one unique reservation in the same
 transaction as the run, initial event, outbox message, and audit event. Idempotent replay does
 not reserve twice. Artifact and corpus counters are changed in the transaction that persists
-their metadata. A failed transaction changes neither resource nor counter.
+their metadata. Every retained immutable corpus version contributes its sentence count;
+duplicate content/language, lineage, or other failed appends change neither resource nor counter.
+A failed transaction changes neither resource nor counter.
 
 The initial reservation lease is the validated run deadline (or the 300-second default) plus
 a five-minute termination grace. Transition to running renews it. Terminal success, failure,
@@ -137,7 +139,7 @@ connection floods, and fair-share scheduling remains a separate release gate.
 
 ## Audit evidence
 
-Project creation, project deletion request/final purge, corpus creation, run
+Project creation, project deletion request/final purge, corpus and corpus-version creation, run
 submit/cancel/retry/terminal transitions, artifact
 creation/tombstone/purge/adoption, expired reservations, and privileged quota-policy changes
 append an audit event in the same database transaction as the mutation. Metadata is
