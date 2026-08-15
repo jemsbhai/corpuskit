@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from corpuskit.config import RuntimeRole, Settings
+
+ROOT = Path(__file__).parents[2]
 
 
 def _production_settings(**overrides: object) -> Settings:
@@ -44,6 +48,20 @@ def test_development_defaults_are_bounded() -> None:
 
     with pytest.raises(ValidationError, match="Instance is frozen"):
         settings.log_level = "DEBUG"
+
+
+def test_committed_development_env_example_is_loadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in tuple(os.environ):
+        if variable.startswith(("CORPUSKIT_", "OPENAI_", "ANTHROPIC_")):
+            monkeypatch.delenv(variable)
+
+    settings = Settings(_env_file=ROOT / ".env.example")
+
+    assert settings.environment == "development"
+    assert settings.database_url == "sqlite+aiosqlite:///./data/corpuskit.db"
+    assert settings.job_backend == "inline"
 
 
 def test_database_credentials_are_excluded_from_settings_repr() -> None:
