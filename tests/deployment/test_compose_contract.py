@@ -20,6 +20,7 @@ ESPEAK_SERVICES = {
 ESPEAK_TMPDIR = "/run/corpuskit-espeak"
 GENERAL_TMPDIR = "/tmp"  # noqa: S108 - asserted container path, not a host temp file
 XDG_CONFIG_HOME = "/tmp/corpuskit-xdg"  # noqa: S108 - asserted container path
+WEB_CACHE = "/app/apps/web/.next/cache"
 
 
 def _compose_config() -> dict[str, Any]:
@@ -74,3 +75,28 @@ def test_non_execution_services_do_not_receive_executable_temp_storage() -> None
         assert all(not item.startswith(f"{ESPEAK_TMPDIR}:") for item in service.get("tmpfs", [])), (
             name
         )
+
+
+def test_read_only_web_runtime_has_only_bounded_writable_storage() -> None:
+    web = _compose_config()["services"]["web"]
+
+    assert web["read_only"] is True
+    assert set(web["tmpfs"]) == {
+        "/tmp:rw,noexec,nosuid,size=64m",  # noqa: S108 - asserted container path
+        f"{WEB_CACHE}:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700",
+    }
+
+
+def test_minio_initialization_retries_transient_startup_failures() -> None:
+    initializer = _compose_config()["services"]["minio-init"]
+    command = initializer["command"]
+    assert isinstance(command, list)
+    assert len(command) == 1
+    script = command[0]
+
+    assert initializer["depends_on"]["minio"]["condition"] == "service_healthy"
+    assert "until" in script
+    assert "attempt=$$((attempt + 1))" in script
+    assert 'if [ "$${attempt}" -ge 20 ]' in script
+    assert "mc mb --ignore-existing" in script
+    assert "mc anonymous set none" in script

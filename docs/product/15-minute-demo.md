@@ -5,6 +5,10 @@ selection, scoring, job-control, quota, and audit surfaces. The automated accept
 Playwright request interception and fails on any API 5xx response. Hosted providers, GPU models,
 DATG, and Phon-RL remain deployment-gated and are not required for this CPU demo.
 
+If this is your first local run, begin with the [getting-started guide](../getting-started.md).
+That path needs only Git and Docker. The Node.js, npm, Chromium, and fixed-fixture steps below are
+for executable acceptance evidence, not for simply starting the website.
+
 ## Before the clock starts
 
 Use Docker with Compose, Node.js 24 LTS, npm 11, and a clean checkout. Cold image builds and the

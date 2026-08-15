@@ -7,6 +7,9 @@ All notable changes to CorpusKit will be documented here. The project follows
 
 ### Added
 
+- A comprehensive Docker-first getting-started guide, copyable direct-development environment
+  examples, first-use workflow, lifecycle and troubleshooting commands, and an enforced local
+  startup documentation contract.
 - Append-only corpus version creation from manual sentences or bounded UTF-8 TXT, CSV, and JSON
   imports, with parent lineage, atomic quota accounting, audit evidence, API contracts, and an
   accessible project-workbench flow.

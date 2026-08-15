@@ -56,9 +56,19 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}";
-        mc mb --ignore-existing "local/$${MINIO_BUCKET}";
-        mc anonymous set none "local/$${MINIO_BUCKET}"
+        attempt=0;
+        until
+          mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" &&
+          mc mb --ignore-existing "local/$${MINIO_BUCKET}" &&
+          mc anonymous set none "local/$${MINIO_BUCKET}";
+        do
+          attempt=$$((attempt + 1));
+          if [ "$${attempt}" -ge 20 ]; then
+            echo "MinIO initialization failed after $${attempt} attempts" >&2;
+            exit 1;
+          fi;
+          sleep 1;
+        done
     environment:
       MC_CONFIG_DIR: /tmp/.mc
       MINIO_ROOT_USER: ${CORPUSKIT_MINIO_ROOT_USER:-corpuskit-local}
@@ -280,6 +290,7 @@ services:
       - "127.0.0.1:${CORPUSKIT_WEB_PORT:-3000}:3000"
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+      - /app/apps/web/.next/cache:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=0700
     cap_drop:
       - ALL
     security_opt:

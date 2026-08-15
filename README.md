@@ -11,6 +11,29 @@ reproducible user workflows.
 > The repository contains a hardened release-candidate pipeline, but no registry publication or
 > production promotion is claimed until its external acceptance gates are recorded.
 
+## Quick start
+
+For an isolated local website, install Git and a running Docker Engine/Desktop with Docker
+Compose v2, then run:
+
+```text
+git clone https://github.com/jemsbhai/corpuskit.git
+cd corpuskit
+docker compose --profile web up --build --detach --wait
+```
+
+Open <http://127.0.0.1:3000/projects>. No host Python, Node.js, npm, eSpeak NG, or `.env` file is
+needed for this Docker path. The first run builds the locked API and web images, migrates
+PostgreSQL, initializes private MinIO storage, and provisions the pinned PHOIBLE snapshot.
+
+> **Do not publish this demo:** every browser receives the same local owner identity and the
+> checked-in development secrets are deterministic. Keep it on loopback. Shared deployments
+> require OIDC and the production topology.
+
+The comprehensive [getting-started guide](docs/getting-started.md) covers verification, first
+corpus creation, ports, logs, updates, persistence and reset, common failures, durable local jobs,
+Windows/PowerShell commands, direct source development, and the production boundary.
+
 ## Product scope
 
 CorpusKit is designed for TTS/ASR dataset builders, speech researchers, clinical
@@ -160,16 +183,19 @@ the [release](https://github.com/jemsbhai/corpuskit/blob/main/docs/operations/re
 
 ## Development prerequisites
 
-- Python 3.12
+The [getting-started guide](docs/getting-started.md) is the authoritative first-run path. Use the
+Docker quick start unless you are changing application source.
+
+- Python >=3.12,<3.13
 - [`uv`](https://docs.astral.sh/uv/)
-- Node.js 24 LTS and npm 11
+- Node.js >=24.18.1,<25 and npm 11.16.0
 - eSpeak NG for real G2P workflows
 - Docker with Compose for the full local stack
 
-Install locked dependencies after lockfiles have been generated:
+The lockfiles are committed. Install them without re-resolving dependencies:
 
 ```bash
-uv sync --all-groups
+uv sync --frozen --all-groups
 npm ci
 ```
 
@@ -182,16 +208,23 @@ uv run corpuskit-phoible provision --json
 uv run corpuskit-phoible status --json
 ```
 
-Run the API and web application:
+For direct source development, copy the separate API and Next.js demo environment examples and
+prepare the local database:
 
 ```bash
 mkdir -p data
-export CORPUSKIT_DATABASE_URL=sqlite+aiosqlite:///./data/corpuskit.db
-uv run corpuskit-phoible provision
+cp .env.example .env
+cp apps/web/.env.example apps/web/.env.local
+uv run corpuskit-phoible provision --json
+uv run corpuskit-phoible status --json
+CORPUSKIT_DATABASE_URL=sqlite+aiosqlite:///./data/corpuskit.db \
 uv run corpuskit-db upgrade
-uv run corpuskit-api
-npm run dev
 ```
+
+Then run `uv run corpuskit-api` and `npm run dev` in **two separate terminals** from the
+repository root. PowerShell equivalents and eSpeak installation notes are in the
+[getting-started guide](docs/getting-started.md). The root `.env` is loaded by Python; Next.js
+loads `apps/web/.env.local` and does not consume the root file.
 
 Every Python service also requires an exact process posture. `corpuskit-api` uses the default
 `CORPUSKIT_RUNTIME_ROLE=api`; direct dispatcher, worker, and maintenance processes must set
@@ -201,13 +234,12 @@ the complete role/command map. Direct API installs bind only to `127.0.0.1` by d
 set `CORPUSKIT_API_BIND_HOST=0.0.0.0` explicitly behind the Compose loopback publication or the
 Helm Service, ingress, and NetworkPolicy boundary.
 
-PowerShell uses `$env:CORPUSKIT_DATABASE_URL =
-"sqlite+aiosqlite:///./data/corpuskit.db"` after `New-Item -ItemType Directory -Force data`.
-The migration CLI deliberately requires the database URL in the process environment; it
-does not infer a production target. Run migrations explicitly before every direct API
-startup after pulling schema changes. Docker Compose performs the same development-only
-ordering through its one-shot `migrate` and `provision-phoible` services. The latter owns
-write access to the shared PHOIBLE volume; API and worker consumers mount it read-only. See
+The migration CLI deliberately requires an explicit database URL in the process environment; it
+does not load `.env` or infer a production target. Run migrations before direct API startup after
+pulling schema changes. The API itself loads the root `.env`. Docker Compose performs the same
+development-only ordering through its one-shot `migrate` and `provision-phoible` services. The
+latter owns write access to the shared PHOIBLE volume; API and worker consumers mount it
+read-only. See
 the [PHOIBLE provisioning runbook](https://github.com/jemsbhai/corpuskit/blob/main/docs/operations/phoible-provisioning.md) for air-gapped
 installation, verification, recovery, and release-job guidance.
 
