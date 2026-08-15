@@ -22,7 +22,12 @@ from corpuskit.domain.artifacts import (
 from corpuskit.domain.errors import QuotaExceededError, ResourceNotFoundError
 from corpuskit.domain.jobs import RunKind, RunState, normalize_run_spec
 from corpuskit.domain.platform import AuditAction, AuditResourceType
-from corpuskit.domain.workspaces import ProjectDeletionInput, ProjectLifecycle
+from corpuskit.domain.workspaces import (
+    ManualCorpusInput,
+    ManualCorpusVersionInput,
+    ProjectDeletionInput,
+    ProjectLifecycle,
+)
 from corpuskit.persistence.artifact_store import InMemoryObjectStore
 from corpuskit.persistence.database import Database
 from corpuskit.persistence.models import (
@@ -113,6 +118,61 @@ class SeededTenant:
     user_id: UUID
     project_id: UUID
     run_id: UUID
+
+
+@pytest.mark.asyncio
+async def test_concurrent_corpus_versions_serialize_parent_lineage() -> None:
+    assert APP_URL is not None
+    tenant = await _seed_tenant("corpus-version-race", full_graph=False)
+    database = Database(APP_URL)
+    service = ProjectWorkspaceService(
+        database,
+        Settings(environment="test", database_url=APP_URL, _env_file=None),
+    )
+    actor = WorkspaceActor(tenant.subject, tenant.organization_id, "pg-version-race")
+    try:
+        async with database.session(
+            TenantContext.user(tenant.organization_id, tenant.subject)
+        ) as session:
+            assert (
+                await session.scalar(
+                    text("SELECT has_table_privilege(current_user, 'projects', 'UPDATE')")
+                )
+                is True
+            )
+            assert (
+                await session.scalar(
+                    text("SELECT has_table_privilege(current_user, 'corpora', 'UPDATE')")
+                )
+                is False
+            )
+
+        creation = await service.create_manual_corpus(
+            actor,
+            tenant.project_id,
+            ManualCorpusInput(name="Concurrent corpus", sentences=("Initial",)),
+        )
+        await asyncio.gather(
+            service.create_manual_version(
+                actor,
+                tenant.project_id,
+                creation.corpus.id,
+                ManualCorpusVersionInput(sentences=("Second candidate",)),
+            ),
+            service.create_manual_version(
+                actor,
+                tenant.project_id,
+                creation.corpus.id,
+                ManualCorpusVersionInput(sentences=("Third candidate",)),
+            ),
+        )
+
+        versions = await service.list_versions(actor, tenant.project_id, creation.corpus.id)
+        assert [version.version_number for version in versions] == [1, 2, 3]
+        assert versions[1].parent_version_id == versions[0].id
+        assert versions[2].parent_version_id == versions[1].id
+    finally:
+        await database.dispose()
 
 
 @pytest.mark.asyncio

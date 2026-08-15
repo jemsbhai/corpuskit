@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useProjectContext } from "@/components/project-context";
 import {
@@ -10,9 +10,11 @@ import {
   MAX_SENTENCE_CHARACTERS,
   corpusExportHref,
   createManualCorpus,
+  createManualVersion,
   createProject,
   getCurrentPrincipal,
   importCorpus,
+  importCorpusVersion,
   listCorpora,
   listSentences,
   listVersions,
@@ -25,6 +27,8 @@ import {
   type Project,
   type ProjectDeletion,
 } from "@/lib/projects";
+
+type WriteAccess = "checking" | "allowed" | "read-only" | "unavailable";
 
 export function ProjectWorkbench() {
   const projectContext = useProjectContext();
@@ -39,10 +43,24 @@ export function ProjectWorkbench() {
   );
   const [sentences, setSentences] = useState<CorpusSentence[]>([]);
   const [canDeleteProjects, setCanDeleteProjects] = useState(false);
+  const [writeAccess, setWriteAccess] = useState<WriteAccess>("checking");
+  const [versionFocusTarget, setVersionFocusTarget] = useState<string | null>(
+    null,
+  );
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState("");
   const [projectActionNotice, setProjectActionNotice] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const selectionRevision = useRef(0);
+  const clearVersionFocusTarget = useCallback(
+    () => setVersionFocusTarget(null),
+    [],
+  );
+  const beginVersionMutation = useCallback(() => selectionRevision.current, []);
+
+  useEffect(() => {
+    selectionRevision.current += 1;
+  }, [selectedCorpus?.id, selectedProject?.id]);
 
   useEffect(() => {
     let active = true;
@@ -53,9 +71,12 @@ export function ProjectWorkbench() {
         setCanDeleteProjects(
           principal.role === "owner" || principal.role === "admin",
         );
+        setWriteAccess(principal.role === "viewer" ? "read-only" : "allowed");
       })
       .catch((caught: unknown) => {
         if (!active) return;
+        setCanDeleteProjects(false);
+        setWriteAccess("unavailable");
         setError(workspaceError(caught));
         setNotice("");
       });
@@ -167,11 +188,15 @@ export function ProjectWorkbench() {
 
   function chooseProject(project: Project) {
     setProjectActionNotice("");
+    setVersionFocusTarget(null);
+    selectionRevision.current += 1;
     projectContext?.selectProject(project.id);
   }
 
   async function chooseCorpus(corpus: Corpus) {
     if (!selectedProject) return;
+    setVersionFocusTarget(null);
+    selectionRevision.current += 1;
     setPending(true);
     setError(null);
     projectContext?.selectCorpusVersion(null);
@@ -203,6 +228,7 @@ export function ProjectWorkbench() {
 
   async function chooseVersion(version: CorpusVersion) {
     if (!selectedProject || !selectedCorpus) return;
+    setVersionFocusTarget(null);
     setPending(true);
     setError(null);
     try {
@@ -231,6 +257,53 @@ export function ProjectWorkbench() {
       items.find((corpus) => corpus.name === createdName) ?? items.at(-1);
     if (created) await chooseCorpus(created);
   }
+
+  async function refreshVersions(
+    createdVersion: CorpusVersion,
+    expectedSelectionRevision: number,
+  ) {
+    if (!selectedProject || !selectedCorpus) return;
+    const project = selectedProject;
+    const corpus = selectedCorpus;
+    const selectionIsCurrent = () =>
+      selectionRevision.current === expectedSelectionRevision;
+    if (!selectionIsCurrent()) return;
+    setError(null);
+    setNotice("");
+    try {
+      const items = await listVersions(project.id, corpus.id);
+      if (!selectionIsCurrent()) return;
+      const created = items.find((item) => item.id === createdVersion.id);
+      if (!created) throw new Error("missing_created_version");
+      const rows = await listSentences(project.id, corpus.id, created.id);
+      if (!selectionIsCurrent()) return;
+      setVersions(items);
+      setSelectedVersion(created);
+      setSentences(rows);
+      projectContext?.selectCorpusVersion({ corpus, version: created });
+      setVersionFocusTarget(created.id);
+      setNotice(
+        `${corpus.name} version ${created.version_number} created and selected.`,
+      );
+    } catch {
+      if (!selectionIsCurrent()) return;
+      setVersions((current) =>
+        [
+          ...current.filter((item) => item.id !== createdVersion.id),
+          createdVersion,
+        ].sort((left, right) => left.version_number - right.version_number),
+      );
+      setSelectedVersion(createdVersion);
+      setSentences([]);
+      projectContext?.selectCorpusVersion({ corpus, version: createdVersion });
+      setVersionFocusTarget(createdVersion.id);
+      setNotice(
+        `${corpus.name} version ${createdVersion.version_number} was created, but its sentences could not be refreshed. Reopen the corpus to retry.`,
+      );
+    }
+  }
+
+  const latestVersion = versions.at(-1) ?? null;
 
   return (
     <div className="projects-workbench">
@@ -276,13 +349,20 @@ export function ProjectWorkbench() {
             selected={selectedProject}
             onSelect={chooseProject}
           />
-          <ProjectForm
-            pending={pending}
-            onCreated={async (project) => {
-              await projectContext?.refreshProjects(project.id);
-            }}
-            onError={setError}
-          />
+          {writeAccess === "allowed" ? (
+            <ProjectForm
+              pending={pending}
+              onCreated={async (project) => {
+                await projectContext?.refreshProjects(project.id);
+              }}
+              onError={setError}
+            />
+          ) : (
+            <WritePermissionNote
+              access={writeAccess}
+              readOnlyMessage="Viewers can inspect projects. An owner, admin, or editor can create a project."
+            />
+          )}
         </div>
         {selectedProject && canDeleteProjects ? (
           <ProjectDeletionForm
@@ -314,8 +394,8 @@ export function ProjectWorkbench() {
             <h2 id="corpora-heading">Corpora</h2>
           </div>
           <p>
-            Manual entry and strict TXT, CSV, or JSON imports create version 1.
-            Corpus update and deletion are not available.
+            Manual entry and strict TXT, CSV, or JSON imports create immutable
+            corpora. Corpus update and deletion are not available.
           </p>
         </div>
         {!selectedProject ? (
@@ -329,14 +409,21 @@ export function ProjectWorkbench() {
               selected={selectedCorpus}
               onSelect={chooseCorpus}
             />
-            <CorpusForm
-              projectId={selectedProject.id}
-              pending={pending}
-              onCreated={async (name) => {
-                await refreshCorpora(name);
-              }}
-              onError={setError}
-            />
+            {writeAccess === "allowed" ? (
+              <CorpusForm
+                projectId={selectedProject.id}
+                pending={pending}
+                onCreated={async (name) => {
+                  await refreshCorpora(name);
+                }}
+                onError={setError}
+              />
+            ) : (
+              <WritePermissionNote
+                access={writeAccess}
+                readOnlyMessage="Viewers can inspect and export corpora. An owner, admin, or editor can create a corpus."
+              />
+            )}
           </div>
         )}
       </section>
@@ -350,24 +437,51 @@ export function ProjectWorkbench() {
             <h2 id="versions-heading">Versions &amp; sentences</h2>
           </div>
           <p>
-            Every digest identifies normalized text in deterministic sentence
-            order.
+            Create immutable successors, then inspect any digest in
+            deterministic sentence order.
           </p>
         </div>
         {!selectedCorpus || !selectedProject ? (
           <WorkspaceEmpty>
-            Select a corpus to inspect its immutable initial version.
+            Select a corpus to inspect and extend its immutable history.
           </WorkspaceEmpty>
         ) : (
-          <VersionBrowser
-            project={selectedProject}
-            corpus={selectedCorpus}
-            versions={versions}
-            selected={selectedVersion}
-            sentences={sentences}
-            pending={pending}
-            onSelect={chooseVersion}
-          />
+          <div className="version-layout">
+            <VersionBrowser
+              project={selectedProject}
+              corpus={selectedCorpus}
+              versions={versions}
+              selected={selectedVersion}
+              sentences={sentences}
+              pending={pending}
+              onSelect={chooseVersion}
+              focusTarget={versionFocusTarget}
+              onFocusTargetHandled={clearVersionFocusTarget}
+            />
+            {writeAccess === "allowed" ? (
+              latestVersion ? (
+                <VersionForm
+                  key={selectedCorpus.id}
+                  projectId={selectedProject.id}
+                  corpusId={selectedCorpus.id}
+                  initialLanguage={latestVersion.language}
+                  pending={pending}
+                  onMutationStarted={beginVersionMutation}
+                  onCreated={refreshVersions}
+                  onError={setError}
+                />
+              ) : (
+                <p className="version-permissions-note" role="status">
+                  Load an existing version before creating its successor.
+                </p>
+              )
+            ) : (
+              <WritePermissionNote
+                access={writeAccess}
+                readOnlyMessage="Viewers can inspect and export immutable versions. An owner, admin, or editor can create the next version."
+              />
+            )}
+          </div>
         )}
       </section>
     </div>
@@ -780,6 +894,214 @@ function CorpusForm({
   );
 }
 
+function VersionForm({
+  projectId,
+  corpusId,
+  initialLanguage,
+  pending,
+  onMutationStarted,
+  onCreated,
+  onError,
+}: {
+  projectId: string;
+  corpusId: string;
+  initialLanguage: string;
+  pending: boolean;
+  onMutationStarted: () => number;
+  onCreated: (
+    version: CorpusVersion,
+    selectionRevision: number,
+  ) => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const [mode, setMode] = useState<"manual" | "file">("manual");
+  const [languageOverride, setLanguageOverride] = useState<string | null>(null);
+  const language = languageOverride ?? initialLanguage;
+  const [sentenceText, setSentenceText] = useState("");
+  const [format, setFormat] = useState<CorpusFileFormat>("txt");
+  const [textColumn, setTextColumn] = useState("text");
+  const [file, setFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const submissionLock = useRef(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submissionLock.current || pending) return;
+    submissionLock.current = true;
+    setSubmitting(true);
+    onError(null);
+    const selectionRevision = onMutationStarted();
+    try {
+      let created: CorpusVersion;
+      if (mode === "manual") {
+        const sentences = sentenceText.split(/\r?\n/u);
+        if (
+          sentences.length > MAX_CORPUS_SENTENCES ||
+          sentences.some((item) => item.length > MAX_SENTENCE_CHARACTERS)
+        ) {
+          throw new Error("client_limit");
+        }
+        created = await createManualVersion(projectId, corpusId, {
+          language,
+          sentences,
+        });
+      } else {
+        if (!file || file.size > MAX_CORPUS_FILE_BYTES)
+          throw new Error("client_file_limit");
+        created = await importCorpusVersion(projectId, corpusId, {
+          language,
+          format,
+          textColumn: format === "csv" ? textColumn : null,
+          file,
+        });
+      }
+      await onCreated(created, selectionRevision);
+      setLanguageOverride(null);
+      setSentenceText("");
+      setFile(null);
+      if (fileInput.current) fileInput.current.value = "";
+    } catch (caught) {
+      if (caught instanceof Error && caught.message === "client_limit") {
+        onError(
+          "Manual input is limited to 10,000 lines and 2,000 characters per sentence.",
+        );
+      } else if (
+        caught instanceof Error &&
+        caught.message === "client_file_limit"
+      ) {
+        onError("Choose one UTF-8 file no larger than 10 MiB.");
+      } else {
+        onError(workspaceError(caught));
+      }
+    } finally {
+      submissionLock.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form
+      aria-busy={submitting}
+      aria-labelledby="version-form-heading"
+      className="workspace-form version-form"
+      onSubmit={(event) => void submit(event)}
+    >
+      <h3 id="version-form-heading">Create the next immutable version</h3>
+      <p className="field-help" id="version-lineage-help">
+        The current corpus remains unchanged. CorpusKit records the latest
+        version as this snapshot&apos;s parent.
+      </p>
+      <fieldset className="mode-picker">
+        <legend>Version input method</legend>
+        <label>
+          <input
+            type="radio"
+            name="version-mode"
+            checked={mode === "manual"}
+            onChange={() => setMode("manual")}
+          />{" "}
+          Version manual sentences
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="version-mode"
+            checked={mode === "file"}
+            onChange={() => setMode("file")}
+          />{" "}
+          Version file import
+        </label>
+      </fieldset>
+      <label htmlFor="version-language">Version eSpeak language</label>
+      <input
+        id="version-language"
+        aria-describedby="version-lineage-help"
+        required
+        maxLength={64}
+        value={language}
+        onChange={(event) => setLanguageOverride(event.target.value)}
+      />
+      {mode === "manual" ? (
+        <div>
+          <label htmlFor="version-manual-sentences">
+            Version sentences <span>one per line</span>
+          </label>
+          <textarea
+            id="version-manual-sentences"
+            required
+            value={sentenceText}
+            onChange={(event) => setSentenceText(event.target.value)}
+          />
+          <p className="field-help">
+            Blank lines and normalized duplicates are removed; the first
+            occurrence wins.
+          </p>
+        </div>
+      ) : (
+        <div className="file-fields">
+          <label htmlFor="version-file-format">Version file format</label>
+          <select
+            id="version-file-format"
+            value={format}
+            onChange={(event) => {
+              setFormat(event.target.value as CorpusFileFormat);
+              setFile(null);
+              if (fileInput.current) fileInput.current.value = "";
+            }}
+          >
+            <option value="txt">TXT — one sentence per line</option>
+            <option value="csv">CSV — header row required</option>
+            <option value="json">JSON — {`{"sentences":[...]}`}</option>
+          </select>
+          {format === "csv" ? (
+            <>
+              <label htmlFor="version-csv-column">
+                Version CSV text column
+              </label>
+              <input
+                id="version-csv-column"
+                required
+                maxLength={160}
+                value={textColumn}
+                onChange={(event) => setTextColumn(event.target.value)}
+              />
+            </>
+          ) : null}
+          <label htmlFor="version-file">
+            UTF-8 {format.toUpperCase()} version file
+          </label>
+          <input
+            id="version-file"
+            ref={fileInput}
+            required
+            type="file"
+            accept={
+              format === "txt"
+                ? ".txt,text/plain"
+                : format === "csv"
+                  ? ".csv,text/csv"
+                  : ".json,application/json"
+            }
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+          <p className="field-help">
+            10 MiB maximum. Archives and mismatched extensions, MIME types, or
+            schemas are rejected.
+          </p>
+        </div>
+      )}
+      <button
+        className="button button-primary"
+        disabled={pending || submitting}
+        type="submit"
+      >
+        {submitting ? "Creating version…" : "Create version"}
+      </button>
+    </form>
+  );
+}
+
 function VersionBrowser({
   project,
   corpus,
@@ -788,6 +1110,8 @@ function VersionBrowser({
   sentences,
   pending,
   onSelect,
+  focusTarget,
+  onFocusTargetHandled,
 }: {
   project: Project;
   corpus: Corpus;
@@ -796,7 +1120,17 @@ function VersionBrowser({
   sentences: CorpusSentence[];
   pending: boolean;
   onSelect: (version: CorpusVersion) => Promise<void>;
+  focusTarget: string | null;
+  onFocusTargetHandled: () => void;
 }) {
+  const focusButton = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (focusTarget !== selected?.id || !focusButton.current) return;
+    focusButton.current.focus();
+    onFocusTargetHandled();
+  }, [focusTarget, onFocusTargetHandled, selected?.id]);
+
   return (
     <div className="version-browser">
       <div className="version-strip" aria-label="Corpus versions">
@@ -804,6 +1138,7 @@ function VersionBrowser({
           <button
             type="button"
             key={version.id}
+            ref={focusTarget === version.id ? focusButton : undefined}
             aria-pressed={selected?.id === version.id}
             disabled={pending}
             onClick={() => void onSelect(version)}
@@ -886,6 +1221,30 @@ function VersionBrowser({
         </WorkspaceEmpty>
       )}
     </div>
+  );
+}
+
+function WritePermissionNote({
+  access,
+  readOnlyMessage,
+}: {
+  access: WriteAccess;
+  readOnlyMessage: string;
+}) {
+  if (access === "allowed") return null;
+  const message =
+    access === "checking"
+      ? "Checking write permissions…"
+      : access === "unavailable"
+        ? "Write controls are unavailable until permissions can be verified."
+        : readOnlyMessage;
+  return (
+    <p
+      className="version-permissions-note"
+      role={access === "read-only" ? undefined : "status"}
+    >
+      {message}
+    </p>
   );
 }
 

@@ -1,4 +1,4 @@
-# Project workspaces and immutable corpus imports
+# Project workspaces and immutable corpus versions
 
 ## Delivery status
 
@@ -11,18 +11,34 @@ This slice implements only:
 - create and list tenant projects;
 - create a corpus and immutable version 1 from manual sentences;
 - import one bounded UTF-8 TXT, CSV, or JSON file;
+- append immutable version 2+ from manual sentences or the same bounded file formats;
 - list corpora, versions, and sentences;
 - download deterministic TXT, JSON, and spreadsheet-safe CSV exports; and
 - schedule an owner/admin-confirmed, retention-safe project deletion lifecycle.
 
-It does **not** implement project/corpus update, individual corpus deletion, new versions of an
-existing corpus, bulk archive ingestion, asynchronous import, lineage editing, or a user-facing
-deletion undo. Project deletion is logically immediate and physically finalized by maintenance
-only after at least 30 days; see the [project deletion runbook](../operations/project-deletion.md).
+It does **not** implement project/corpus metadata update, individual corpus deletion, bulk archive
+ingestion, asynchronous import, lineage editing, or a user-facing deletion undo. Project deletion
+is logically immediate and physically finalized by maintenance only after at least 30 days; see
+the [project deletion runbook](../operations/project-deletion.md).
 
 The browser sentence table deliberately previews at most the first 500 rows; TXT, JSON, and
-CSV downloads always contain the complete version. Create/import forms lock while a request
+CSV downloads always contain the complete version. Create/import/append forms lock while a request
 is in flight because these endpoints do not claim idempotent replay semantics.
+
+## Version lineage
+
+Writers append through `POST /api/v1/projects/{project_id}/corpora/{corpus_id}/versions` for
+manual text or the `/versions/imports` multipart variant. The server chooses the parent and next
+version number; clients cannot rewrite lineage or choose a historical parent. The active
+project-row lock serializes production PostgreSQL version writers with project deletion, while
+unique corpus/version and corpus/content constraints fail closed on numbering races or duplicate
+normalized content in the same language.
+
+Every successful append stores a complete immutable sentence snapshot. Historical versions and
+their exports remain unchanged. The new version's sentence count is charged atomically to the
+tenant's retained-corpus quota, and rollback of any lineage, uniqueness, or audit failure also
+rolls back that charge. Audit metadata records only the corpus identifier, parent/version
+identity, language, sentence count, and content digest; it never records sentence text.
 
 ## Import contracts
 
@@ -57,10 +73,10 @@ different purposes.
 
 ## Authorization model
 
-Owner, admin, and editor roles may create. Viewers may list and export. Every service query
-resolves the authenticated subject through the organization membership table and scopes the
-full project/corpus/version hierarchy by organization. Foreign-tenant identifiers return the
-same not-found contract as absent identifiers.
+Owner, admin, and editor roles may create corpora and append versions. Viewers may list and
+export. Every service query resolves the authenticated subject through the organization
+membership table and scopes the full project/corpus/version hierarchy by organization.
+Foreign-tenant identifiers return the same not-found contract as absent identifiers.
 
 Only owners and admins may request project deletion. The browser presents the explicit danger
 control only after reading the server-verified role from `/api/v1/auth/me`; the API remains the

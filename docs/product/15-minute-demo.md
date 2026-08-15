@@ -41,9 +41,10 @@ $env:CORPUSKIT_LIVE_BASE_URL = "http://127.0.0.1:3000"
 npm run test:e2e:live --workspace @corpuskit/web
 ```
 
-The automated run is the executable acceptance record. It creates uniquely named demo data and
-leaves it visible for the guided review below. A passing run proves that requests reached the
-external stack; it does not prove live provider, qualified GPU, vendor IdP, TLS Redis, or
+The automated run is the executable acceptance record. It creates uniquely named demo data,
+appends an immutable corpus successor, verifies that version 1 remains readable/exportable, and
+leaves the data visible for the guided review below. A passing run proves that requests reached
+the external stack; it does not prove live provider, qualified GPU, vendor IdP, TLS Redis, or
 multi-replica behavior.
 
 ## Guided review (minutes 2–15)

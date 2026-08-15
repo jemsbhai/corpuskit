@@ -57,6 +57,13 @@ class ManualCorpusInput(WorkspaceModel):
     sentences: tuple[str, ...] = Field(min_length=1, max_length=10_000)
 
 
+class ManualCorpusVersionInput(WorkspaceModel):
+    """A new immutable version appended to an existing corpus."""
+
+    language: str = Field(default="en-us", min_length=1, max_length=64)
+    sentences: tuple[str, ...] = Field(min_length=1, max_length=10_000)
+
+
 class CorpusUpload(WorkspaceModel):
     """A fully buffered, bounded upload ready for strict format validation."""
 
@@ -69,11 +76,24 @@ class CorpusUpload(WorkspaceModel):
     text_column: str | None = Field(default=None, min_length=1, max_length=160)
 
 
+class CorpusVersionUpload(WorkspaceModel):
+    """A bounded upload used to append one immutable corpus version."""
+
+    language: str = Field(default="en-us", min_length=1, max_length=64)
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=160)
+    file_format: CorpusFileFormat
+    content: bytes
+    text_column: str | None = Field(default=None, min_length=1, max_length=160)
+
+
 __all__ = [
     "CorpusExportFormat",
     "CorpusFileFormat",
     "CorpusUpload",
+    "CorpusVersionUpload",
     "ManualCorpusInput",
+    "ManualCorpusVersionInput",
     "ProjectDeletionInput",
     "ProjectInput",
     "ProjectLifecycle",

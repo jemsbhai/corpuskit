@@ -312,6 +312,45 @@ export async function importCorpus(
   );
 }
 
+export async function createManualVersion(
+  projectId: string,
+  corpusId: string,
+  input: {
+    readonly language: string;
+    readonly sentences: string[];
+  },
+): Promise<CorpusVersion> {
+  const value = await requestJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/corpora/${encodeURIComponent(corpusId)}/versions`,
+    jsonRequest(input),
+  );
+  if (!isVersion(value)) throw new ProjectContractError();
+  return value;
+}
+
+export async function importCorpusVersion(
+  projectId: string,
+  corpusId: string,
+  input: {
+    readonly language: string;
+    readonly format: CorpusFileFormat;
+    readonly textColumn: string | null;
+    readonly file: File;
+  },
+): Promise<CorpusVersion> {
+  const form = new FormData();
+  form.set("language", input.language);
+  form.set("format", input.format);
+  if (input.textColumn) form.set("text_column", input.textColumn);
+  form.set("file", input.file);
+  const value = await requestJson(
+    `/api/v1/projects/${encodeURIComponent(projectId)}/corpora/${encodeURIComponent(corpusId)}/versions/imports`,
+    { method: "POST", body: form },
+  );
+  if (!isVersion(value)) throw new ProjectContractError();
+  return value;
+}
+
 export async function listVersions(
   projectId: string,
   corpusId: string,

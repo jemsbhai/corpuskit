@@ -290,6 +290,7 @@
           "project.deletion_requested",
           "project.purged",
           "corpus.created",
+          "corpus.version_created",
           "run.submitted",
           "run.cancellation_requested",
           "run.retry_submitted",
@@ -482,6 +483,44 @@
           "format"
         ],
         "title": "Body_import_corpus_api_v1_projects__project_id__corpora_imports_post",
+        "type": "object"
+      },
+      "Body_import_version_api_v1_projects__project_id__corpora__corpus_id__versions_imports_post": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/CorpusFileFormat"
+          },
+          "language": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Language",
+            "type": "string"
+          },
+          "text_column": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Column"
+          }
+        },
+        "required": [
+          "file",
+          "language",
+          "format"
+        ],
+        "title": "Body_import_version_api_v1_projects__project_id__corpora__corpus_id__versions_imports_post",
         "type": "object"
       },
       "Body_upload_artifact_api_v1_projects__project_id__artifacts_post": {
@@ -4996,6 +5035,33 @@
           "sentences"
         ],
         "title": "ManualCorpusInput",
+        "type": "object"
+      },
+      "ManualCorpusVersionInput": {
+        "additionalProperties": false,
+        "description": "A new immutable version appended to an existing corpus.",
+        "properties": {
+          "language": {
+            "default": "en-us",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Language",
+            "type": "string"
+          },
+          "sentences": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "title": "Sentences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sentences"
+        ],
+        "title": "ManualCorpusVersionInput",
         "type": "object"
       },
       "ModelDevice": {
@@ -13172,6 +13238,140 @@
           }
         ],
         "summary": "List Versions",
+        "tags": [
+          "project-workspaces"
+        ]
+      },
+      "post": {
+        "operationId": "create_manual_version_api_v1_projects__project_id__corpora__corpus_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "corpus_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Corpus Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualCorpusVersionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Manual Version",
+        "tags": [
+          "project-workspaces"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/corpora/{corpus_id}/versions/imports": {
+      "post": {
+        "operationId": "import_version_api_v1_projects__project_id__corpora__corpus_id__versions_imports_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "corpus_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Corpus Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_version_api_v1_projects__project_id__corpora__corpus_id__versions_imports_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Version",
         "tags": [
           "project-workspaces"
         ]

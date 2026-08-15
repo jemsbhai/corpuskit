@@ -227,12 +227,11 @@ and session-encryption keys, and an explicit fixed internal API URL. Missing or 
 auth/session infrastructure fails closed and never enables an in-memory fallback.
 
 The `/projects` workbench now demonstrates tenant-scoped project creation, bounded manual or
-UTF-8 TXT/CSV/JSON corpus import, immutable version inspection, deterministic exports, and
-owner/admin-confirmed project deletion.
+UTF-8 TXT/CSV/JSON corpus import, append-only immutable corpus versions with explicit parent
+lineage, version inspection, deterministic exports, and owner/admin-confirmed project deletion.
 The API router is integrated with the durable control plane through one application-owned
 database lifecycle; see [`docs/product/project-workspaces.md`](https://github.com/jemsbhai/corpuskit/blob/main/docs/product/project-workspaces.md).
-Project/corpus update, individual corpus deletion, and creation of later corpus versions are not
-presented as available.
+Project/corpus metadata update and individual corpus deletion are not presented as available.
 
 The application also includes bounded G2P, PHOIBLE inventory, evaluation, distribution/text
 quality/error-rate/trajectory analysis, six-algorithm selection comparison, repository

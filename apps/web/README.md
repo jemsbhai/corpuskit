@@ -119,6 +119,9 @@ npm run test:e2e --workspace @corpuskit/web
 CORPUSKIT_LIVE_BASE_URL=http://127.0.0.1:3000 npm run test:e2e:live --workspace @corpuskit/web
 ```
 
+The explicit live runner executes both the end-to-end demo and the project workspace history
+flow, including a real immutable successor append and historical-version export.
+
 The scoped workbench configuration enforces at least 90% branch coverage per new state/transport
 module. Playwright runs every workbench route through Chromium, Firefox, and WebKit with axe,
 console/page/request failure checks, keyboard reachability, and a 320-pixel/200%-text layout

@@ -31,7 +31,9 @@ from corpuskit.domain.workspaces import (
     CorpusExportFormat,
     CorpusFileFormat,
     CorpusUpload,
+    CorpusVersionUpload,
     ManualCorpusInput,
+    ManualCorpusVersionInput,
     ProjectDeletionInput,
     ProjectInput,
 )
@@ -220,6 +222,33 @@ class ProjectWorkspaceService:
         prepared = self._prepare(upload.language, sentences, operation)
         return await self._persist_corpus(actor, project_id, upload.name, prepared)
 
+    async def create_manual_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        request: ManualCorpusVersionInput,
+    ) -> VersionSnapshot:
+        operation = "corpus.version.create"
+        if _utf8_size(request.sentences) > self._max_upload_bytes:
+            raise InvalidRequestError(operation)
+        prepared = self._prepare(request.language, request.sentences, operation)
+        return await self._persist_version(actor, project_id, corpus_id, prepared, operation)
+
+    async def import_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        upload: CorpusVersionUpload,
+    ) -> VersionSnapshot:
+        operation = "corpus.version.import"
+        if not upload.content or len(upload.content) > self._max_upload_bytes:
+            raise InvalidRequestError(operation)
+        sentences = parse_corpus_upload(upload, operation=operation)
+        prepared = self._prepare(upload.language, sentences, operation)
+        return await self._persist_version(actor, project_id, corpus_id, prepared, operation)
+
     async def list_corpora(
         self,
         actor: WorkspaceActor,
@@ -359,6 +388,50 @@ class ProjectWorkspaceService:
                 version=_version_snapshot(version),
             )
 
+    async def _persist_version(
+        self,
+        actor: WorkspaceActor,
+        project_id: UUID,
+        corpus_id: UUID,
+        prepared: PreparedCorpus,
+        operation: str,
+    ) -> VersionSnapshot:
+        async with self.database.session(_context(actor)) as session:
+            user_id, role = await self._actor(session, actor)
+            _require_writer(role, operation)
+            await QuotaManager.consume_corpus_sentences(
+                session,
+                organization_id=actor.organization_id,
+                sentence_count=len(prepared.sentences),
+                operation=operation,
+            )
+            version = await ProjectService.create_version(
+                session,
+                organization_id=actor.organization_id,
+                user_id=user_id,
+                project_id=project_id,
+                corpus_id=corpus_id,
+                prepared=prepared,
+                operation=operation,
+            )
+            await AuditWriter.append(
+                session,
+                organization_id=actor.organization_id,
+                actor=AuditIdentity.user(user_id),
+                action=AuditAction.CORPUS_VERSION_CREATED,
+                resource_type=AuditResourceType.CORPUS,
+                resource_id=corpus_id,
+                request_id=actor.request_id,
+                metadata={
+                    "content_sha256": version.content_sha256,
+                    "language": version.language,
+                    "parent_version_id": str(version.parent_version_id),
+                    "sentence_count": version.sentence_count,
+                    "version_number": version.version_number,
+                },
+            )
+            return _version_snapshot(version)
+
     def _prepare(
         self,
         language: str,
@@ -392,7 +465,7 @@ class ProjectWorkspaceService:
 
 
 def parse_corpus_upload(
-    upload: CorpusUpload, *, operation: str = "corpus.import"
+    upload: CorpusUpload | CorpusVersionUpload, *, operation: str = "corpus.import"
 ) -> tuple[str, ...]:
     """Validate extension, media type, UTF-8, and a format-specific sentence schema."""
 

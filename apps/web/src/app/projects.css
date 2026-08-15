@@ -246,6 +246,32 @@
   margin-top: 2rem;
 }
 
+.version-layout {
+  margin-top: 2rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.version-layout .version-browser {
+  min-width: 0;
+  margin-top: 0;
+}
+
+.version-form > .field-help {
+  margin: -0.5rem 0 1rem;
+}
+
+.version-permissions-note {
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink-soft);
+}
+
 .version-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -333,7 +359,8 @@
 @media (max-width: 900px) {
   .projects-intro,
   .project-layout,
-  .corpus-layout {
+  .corpus-layout,
+  .version-layout {
     grid-template-columns: 1fr;
     gap: 1.4rem;
   }
