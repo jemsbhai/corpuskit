@@ -252,7 +252,7 @@ class ProjectService:
         prepared: PreparedCorpus,
         operation: str,
     ) -> CorpusVersion:
-        """Append one immutable version while serializing writers per corpus."""
+        """Append one immutable version while holding the active parent-project row."""
 
         await ProjectService._require_project(
             session,
@@ -267,7 +267,6 @@ class ProjectService:
             project_id=project_id,
             corpus_id=corpus_id,
             operation=operation,
-            for_update=True,
         )
         latest = await session.scalar(
             select(CorpusVersion)
@@ -336,7 +335,6 @@ class ProjectService:
         project_id: UUID,
         corpus_id: UUID,
         operation: str,
-        for_update: bool = False,
     ) -> Corpus:
         statement = (
             select(Corpus)
@@ -349,8 +347,6 @@ class ProjectService:
                 Project.lifecycle_state == ProjectLifecycle.ACTIVE,
             )
         )
-        if for_update:
-            statement = statement.with_for_update()
         corpus = await session.scalar(statement)
         if corpus is None:
             raise ResourceNotFoundError(operation)

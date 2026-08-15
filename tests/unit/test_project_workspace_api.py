@@ -456,6 +456,30 @@ async def test_multipart_metadata_validation_is_sanitized(ready_report: Capabili
 
 
 @pytest.mark.asyncio
+async def test_version_import_multipart_metadata_validation_is_sanitized(
+    ready_report: CapabilityReport,
+) -> None:
+    service = FakeWorkspaceService()
+    base = f"/api/v1/projects/{PROJECT_ID}/corpora/{CORPUS_ID}/versions"
+    async with _client(ready_report, service) as client:
+        response = await client.post(
+            f"{base}/imports",
+            data={"language": "en-us", "format": "txt"},
+            files={"file": (f"{'x' * 256}.txt", b"Hello", "text/plain")},
+            headers={"X-Request-ID": "invalid-version-upload"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "invalid_request",
+        "message": "The request is not valid for this operation.",
+        "operation": "corpus.version.import",
+        "request_id": "invalid-version-upload",
+    }
+    assert service.version_upload is None
+
+
+@pytest.mark.asyncio
 async def test_list_and_export_contracts_preserve_integrity_headers(
     ready_report: CapabilityReport,
 ) -> None:

@@ -131,6 +131,22 @@ async def test_concurrent_corpus_versions_serialize_parent_lineage() -> None:
     )
     actor = WorkspaceActor(tenant.subject, tenant.organization_id, "pg-version-race")
     try:
+        async with database.session(
+            TenantContext.user(tenant.organization_id, tenant.subject)
+        ) as session:
+            assert (
+                await session.scalar(
+                    text("SELECT has_table_privilege(current_user, 'projects', 'UPDATE')")
+                )
+                is True
+            )
+            assert (
+                await session.scalar(
+                    text("SELECT has_table_privilege(current_user, 'corpora', 'UPDATE')")
+                )
+                is False
+            )
+
         creation = await service.create_manual_corpus(
             actor,
             tenant.project_id,

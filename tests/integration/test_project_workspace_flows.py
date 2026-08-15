@@ -481,6 +481,37 @@ async def test_import_limits_are_enforced_before_persistence(database: Database)
         )
     assert await service.list_corpora(actor, project.id) == ()
 
+    creation = await service.create_manual_corpus(
+        actor,
+        project.id,
+        ManualCorpusInput(name="Version seed", sentences=("seed",)),
+    )
+    with pytest.raises(InvalidRequestError) as manual_version_error:
+        await service.create_manual_version(
+            actor,
+            project.id,
+            creation.corpus.id,
+            ManualCorpusVersionInput(sentences=("1234", "5678")),
+        )
+    assert manual_version_error.value.operation == "corpus.version.create"
+
+    for filename, content in (("empty.txt", b""), ("large.txt", b"12345678")):
+        with pytest.raises(InvalidRequestError) as imported_version_error:
+            await service.import_version(
+                actor,
+                project.id,
+                creation.corpus.id,
+                CorpusVersionUpload(
+                    filename=filename,
+                    content_type="text/plain",
+                    file_format=CorpusFileFormat.TXT,
+                    content=content,
+                ),
+            )
+        assert imported_version_error.value.operation == "corpus.version.import"
+
+    assert await service.list_versions(actor, project.id, creation.corpus.id) == (creation.version,)
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio

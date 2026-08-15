@@ -29,10 +29,10 @@ is in flight because these endpoints do not claim idempotent replay semantics.
 
 Writers append through `POST /api/v1/projects/{project_id}/corpora/{corpus_id}/versions` for
 manual text or the `/versions/imports` multipart variant. The server chooses the parent and next
-version number; clients cannot rewrite lineage or choose a historical parent. Project-row and
-per-corpus database locks serialize production PostgreSQL writers and project deletion,
-while unique corpus/version and corpus/content constraints fail closed on numbering races or
-duplicate normalized content in the same language.
+version number; clients cannot rewrite lineage or choose a historical parent. The active
+project-row lock serializes production PostgreSQL version writers with project deletion, while
+unique corpus/version and corpus/content constraints fail closed on numbering races or duplicate
+normalized content in the same language.
 
 Every successful append stores a complete immutable sentence snapshot. Historical versions and
 their exports remain unchanged. The new version's sentence count is charged atomically to the

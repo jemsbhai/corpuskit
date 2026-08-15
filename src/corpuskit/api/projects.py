@@ -75,7 +75,8 @@ class ProjectWorkspaceApi(Protocol):
         project_id: UUID,
         corpus_id: UUID,
         request: ManualCorpusVersionInput,
-    ) -> VersionSnapshot: ...
+    ) -> VersionSnapshot:
+        raise NotImplementedError
 
     async def import_version(
         self,
@@ -83,7 +84,8 @@ class ProjectWorkspaceApi(Protocol):
         project_id: UUID,
         corpus_id: UUID,
         upload: CorpusVersionUpload,
-    ) -> VersionSnapshot: ...
+    ) -> VersionSnapshot:
+        raise NotImplementedError
 
     async def list_corpora(
         self, actor: WorkspaceActor, project_id: UUID
