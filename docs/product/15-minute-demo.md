@@ -79,9 +79,10 @@ and submit the explicit Select run described below.
    ordered rows of the selected immutable version to be verified, and inspect the automated
    default phonemize run's version lineage plus state/events. In the basic profile the run remains
    queued because no dispatcher or worker is running. With the durable profile, choose **Select**
-   under **Supported run kind**, keep the selected immutable version and derived target, submit,
-   and wait for a terminal state. Follow **Inspect final artifact**: `/artifacts?artifact=<uuid>`
-   fetches that exact selection artifact even when it is outside the current list page.
+   under **Supported run kind**, keep the selected immutable version, clear **Explicit target
+   units** to use the derived target, submit, and wait for a terminal state. Follow **Inspect final
+   artifact**: `/artifacts?artifact=<uuid>` fetches that exact selection artifact even when it is
+   outside the current list page.
 
    The fixture has six rows and fits every atomic run contract. CorpusKit will not silently
    truncate a larger selected version: phonemize/evaluate stop at 500 rows and select at 2,000.
