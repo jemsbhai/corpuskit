@@ -52,8 +52,9 @@ the external stack; it does not prove live provider, qualified GPU, vendor IdP, 
 multi-replica behavior.
 
 The basic command above validates real run submission and persisted history but intentionally does
-not wait for execution. To demonstrate a completed CPU run and adopted artifacts, start the
-[durable profile](../getting-started.md#optional-use-durable-local-jobs) before the clock.
+not wait for execution. To demonstrate a completed CPU run and an adopted selection artifact,
+start the [durable profile](../getting-started.md#optional-use-durable-local-jobs) before the clock
+and submit the explicit Select run described below.
 
 ## Guided review (minutes 2–15)
 
@@ -75,11 +76,12 @@ not wait for execution. To demonstrate a completed CPU run and adopted artifacts
    zero in this deterministic no-model surface; the **Advanced** fluency/perplexity run demonstrates
    exact-policy offline model-backed composite ranking when a local worker is configured.
 5. **Run submission, history, and optional execution (2 minutes).** Open `/jobs`, wait for all
-   ordered rows of the selected immutable version to be verified, submit the default typed
-   phonemize run, refresh, and inspect its version lineage plus state/events. In the basic profile
-   the run remains queued because no dispatcher or worker is running. With the durable profile,
-   wait for a terminal state and follow any artifact link: `/artifacts?artifact=<uuid>` fetches
-   that exact artifact even when it is outside the current list page.
+   ordered rows of the selected immutable version to be verified, and inspect the automated
+   default phonemize run's version lineage plus state/events. In the basic profile the run remains
+   queued because no dispatcher or worker is running. With the durable profile, choose **Select**
+   under **Supported run kind**, keep the selected immutable version and derived target, submit,
+   and wait for a terminal state. Follow **Inspect final artifact**: `/artifacts?artifact=<uuid>`
+   fetches that exact selection artifact even when it is outside the current list page.
 
    The fixture has six rows and fits every atomic run contract. CorpusKit will not silently
    truncate a larger selected version: phonemize/evaluate stop at 500 rows and select at 2,000.
