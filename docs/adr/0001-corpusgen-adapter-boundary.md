@@ -35,8 +35,8 @@ CorpusGen imports remain internal even when they are documented public APIs.
 
 The boundary is enforced by an architecture test. CorpusGen upgrades require a dedicated
 compatibility PR that runs golden fixtures for every capability and documents output or
-schema changes. Generated CLI/Python recipes are a reproducibility feature; production
-execution does not shell out.
+schema changes. Generated, copy-only CorpusGen CLI previews are a reproducibility aid;
+production execution does not shell out and the preview surface does not generate Python code.
 
 ## Consequences
 

@@ -44,15 +44,15 @@ The preview service rejects Hugging Face sources before the CorpusGen adapter or
 can run, so HTTP requests cannot trigger remote downloads. The validation route authorizes an
 exact durable request without opening a dataset, running eSpeak, or contacting the network.
 
-The standalone routes are:
+The application mounts these public routes:
 
-- `POST /generation/preview`
-- `POST /generation/repository/validate`
-- `POST /scoring/composite`
-- `POST /scoring/ngram/scorers`
-- `POST /scoring/ngram/constraints`
-- `POST /scoring/phonotactics`
-- `POST /scoring/readability`
+- `POST /api/v1/generation/preview`
+- `POST /api/v1/generation/repository/validate`
+- `POST /api/v1/scoring/composite`
+- `POST /api/v1/scoring/ngram/scorers`
+- `POST /api/v1/scoring/ngram/constraints`
+- `POST /api/v1/scoring/phonotactics`
+- `POST /api/v1/scoring/readability`
 
 ## Worker integration and dataset policy
 
