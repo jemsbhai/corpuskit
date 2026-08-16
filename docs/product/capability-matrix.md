@@ -191,7 +191,9 @@ machine-checked [acceptance evidence registry](acceptance-evidence.json); entrie
 
 ## Evidence map
 
-The capability baseline was audited from CorpusGen 0.1.7 at these source and documentation paths:
+The capability baseline was audited from the
+[tagged CorpusGen 0.1.7 source tree](https://github.com/jemsbhai/corpusgen/tree/v0.1.7).
+Unless a link says otherwise, every upstream path in this section is relative to that tag:
 
 - `src/corpusgen/__init__.py`
 - `src/corpusgen/g2p/`
@@ -202,9 +204,10 @@ The capability baseline was audited from CorpusGen 0.1.7 at these source and doc
 - `src/corpusgen/select/`
 - `src/corpusgen/generate/`
 - `src/corpusgen/cli/`
-- `README.md`
-- `docs/api.md`
-- `docs/examples.md`
+- [`README.md`](https://github.com/jemsbhai/corpusgen/blob/v0.1.7/README.md)
+- [`docs/api.md`](https://github.com/jemsbhai/corpusgen/blob/v0.1.7/docs/api.md)
+- [`docs/examples.md`](https://github.com/jemsbhai/corpusgen/blob/v0.1.7/docs/examples.md)
+- [`examples/`](https://github.com/jemsbhai/corpusgen/tree/v0.1.7/examples)
 - `pyproject.toml`
 
 The upstream behavioral evidence and expected compatibility contracts are concentrated in:

@@ -96,9 +96,12 @@ FastAPI is responsible for:
 - a bounded monotonic run-event polling endpoint; and
 - a development/test OpenAPI document (the production HTTP route is disabled).
 
-The API does not execute CorpusGen operations inline except tightly bounded read-only
-lookups demonstrated to remain below the synchronous latency budget. Corpus evaluation,
-selection, generation, model inference, training, imports, and exports are jobs.
+The API executes only explicitly bounded interactive CorpusGen operations inline: inventory and
+G2P, evaluation, selection, analysis and scoring, and the local repository preview. Core
+evaluation and selection can also be submitted through the persisted run control plane when job
+history or durable execution is required. Hosted or local model generation, dataset-backed work,
+DATG execution, and Phon-RL training never run in the API process. Corpus import and deterministic
+export are bounded persistence operations rather than CorpusGen jobs.
 
 ### CorpusGen adapter
 
@@ -111,9 +114,10 @@ cancellation, and internal error categories.
 CorpusGen is exact-pinned. An upgrade requires golden compatibility tests for all supported
 capabilities and a deliberate schema or result migration when behavior changes. CorpusKit
 calls Python APIs rather than shelling out to the CorpusGen CLI; the UI can generate
-equivalent CLI and Python recipes for reproduction.
+reviewable CorpusGen CLI previews for supported parity workflows.
 
-See [ADR-0001](../adr/0001-corpusgen-adapter-boundary.md).
+See [ADR-0001](../adr/0001-corpusgen-adapter-boundary.md) and
+[CorpusKit and CorpusGen](../corpusgen-relationship.md).
 
 ### Temporal workflows and workers
 
@@ -319,12 +323,14 @@ and recovery time objectives before general availability.
 
 ### Local demo
 
-Docker Compose supplies the web app, API, PostgreSQL, S3-compatible storage, Temporal, and a
-CPU worker with pinned PHOIBLE data and a sample corpus. The core import, inventory, G2P,
-analysis, selection, repository generation, comparison, and export journey works without
-an external account or provider key. A GPU profile adds local generation, perplexity,
-Phon-DATG, and Phon-RL. Recorded walkthrough fixtures, if present, are visibly labeled and
-cannot be mistaken for provider/model execution.
+The basic Docker Compose path supplies the web app, API, PostgreSQL, S3-compatible storage, pinned
+PHOIBLE data, a fixed local owner, and an empty Demo project. Bounded import, inventory, G2P,
+analysis, selection, local repository preview, scoring, and export work without an external
+account or provider key. That non-durable topology can persist a queued run but does not execute it:
+it has no dispatcher or worker. The optional `durable` profile, used with the Temporal backend,
+adds Temporal, the dispatcher, and a batch CPU worker. Separate hosted and GPU profiles require
+explicit policy, credentials, model caches, or qualified hardware. Recorded walkthrough fixtures,
+if present, are visibly labeled and cannot be mistaken for provider/model execution.
 
 ### Production
 
@@ -341,14 +347,20 @@ a release job before compatible application rollout.
 apps/web/                         web product
 src/corpuskit/api/                HTTP control plane
 src/corpuskit/adapters/corpusgen/ only CorpusGen imports
+src/corpuskit/auth/               identity and role authorization
 src/corpuskit/domain/             pure product rules and state transitions
 src/corpuskit/services/           application use cases
 src/corpuskit/workflows/          Temporal workflows and activities
+src/corpuskit/worker/             dispatcher and profile-specific worker composition
 src/corpuskit/persistence/        database and object-store adapters
-src/corpuskit/security/           identity, authorization, secrets, audit
+src/corpuskit/operations/         provisioning, continuity, and maintenance CLIs
 src/corpuskit/telemetry/          logs, traces, metrics, redaction
+contracts/                        committed public interface contracts
+compose.yaml                      local service topology
+docker/                           API, web, worker, and test images
+deploy/helm/                      production Kubernetes chart
+.github/workflows/                CI, qualification, release, and promotion workflows
 tests/                            unit/property/integration/contract/E2E/acceptance
-infra/                            Compose, Helm, and Terraform
 docs/                             architecture, ADRs, threat model, runbooks, product docs
 ```
 
@@ -359,7 +371,8 @@ interfaces.
 ## Required architecture tests
 
 - No package outside `src/corpuskit/adapters/corpusgen/` imports `corpusgen`.
-- Web code accesses backend behavior only through the generated API client.
+- Web code accesses backend behavior only through reviewed API clients and strict response
+  parsers; the committed OpenAPI document is checked for drift but does not generate them.
 - Tenant-owned repositories require an organization scope and exercise PostgreSQL RLS.
 - Workflow inputs contain IDs and secret references, never raw provider credentials.
 - Run specifications and corpus versions reject in-place mutation.

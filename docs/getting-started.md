@@ -3,6 +3,9 @@
 This guide takes a new contributor from a clean checkout to a working local CorpusKit website.
 The recommended path uses Docker Compose and does not require Python, Node.js, npm, or eSpeak NG
 on the host. A separate source-development path is included for people changing the application.
+If you are deciding between the application and the underlying Python library, read
+[CorpusKit and CorpusGen](corpusgen-relationship.md). After startup, use the
+[recipe cookbook](recipes.md) for checked browser and API examples.
 
 > **Local use only:** the Compose quick start uses deterministic development secrets and signs
 > every browser in as the same demo owner. All published ports bind to `127.0.0.1`, but that is
@@ -85,11 +88,16 @@ local organization, and an empty `Demo project` automatically.
    [`apps/web/e2e/fixtures/demo-corpus.txt`](../apps/web/e2e/fixtures/demo-corpus.txt).
 4. Select the new immutable version and inspect its ordered sentences and JSON, TXT, or CSV
    export.
-5. Try the same sentences in **Evaluate**, **Selection**, or **G2P**. Use **Jobs** for the local
-   inline job flow.
+5. Try the same sentences in **Evaluate**, **Selection**, or **G2P**. **Jobs** can submit a run and
+   show its persisted history; in the basic profile it remains queued until you enable the
+   [durable profile](#optional-use-durable-local-jobs).
 
 The landing page's Riverbend values are illustrative. Results produced in the workbenches above
 come from the running API.
+
+Continue with the [recipe cookbook](recipes.md) to create and append immutable corpus versions,
+call G2P, inspect PHOIBLE, evaluate and select sentences, preview local repository generation,
+submit a persisted run, generate a CorpusGen CLI preview, and run the multilingual smoke test.
 
 ## What the basic Compose profile runs
 
@@ -104,8 +112,9 @@ come from the running API.
 | `minio-init`        | One-shot private bucket initialization    | exits `0`               |
 | `provision-phoible` | One-shot pinned PHOIBLE provisioning      | exits `0`               |
 
-The basic profile uses the in-process job backend. It deliberately omits Temporal, separate
-workers, hosted-provider access, local-model caches, and GPU execution.
+The basic profile persists run submissions and history but has no dispatcher or worker, so it does
+not execute queued runs. It deliberately omits Temporal, hosted-provider access, local-model
+caches, and GPU execution.
 
 ## Stop, restart, update, and reset
 
@@ -308,9 +317,10 @@ npm run dev
 Keep both processes running. Verify the API at
 <http://127.0.0.1:8000/api/v1/health/ready>, then open <http://127.0.0.1:3000/projects>.
 
-The direct-development defaults use SQLite, filesystem artifacts, in-process sessions, demo
-identity, and inline jobs. They do not provide PostgreSQL RLS, shared sessions, or durable worker
-recovery and are not a production deployment.
+The direct-development defaults use SQLite, filesystem artifacts, in-process sessions, and demo
+identity. The two-process setup can persist run submissions but does not execute them; use the
+optional durable Compose profile for execution. It does not provide PostgreSQL RLS, shared
+sessions, or production worker recovery and is not a production deployment.
 
 ## Run the live acceptance walkthrough
 

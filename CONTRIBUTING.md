@@ -28,6 +28,20 @@ npm run build
 No required check may use `continue-on-error`. New production code must be typed, must
 not introduce a new cross-tenant data path, and must include tests for its failure modes.
 
+## Documentation examples
+
+The [recipe cookbook](docs/recipes.md) is the task-oriented entry point and
+[CorpusKit and CorpusGen](docs/corpusgen-relationship.md) owns the cross-project boundary. Mark a
+copy/paste JSON body with `<!-- recipe-request:name -->` immediately before its fenced block and
+add its real DTO validator to `tests/architecture/test_documentation_contract.py`. That test also
+keeps recipe routes on mounted `/api/v1` paths, resolves relative links, and derives the documented
+CorpusGen compatibility version from `pyproject.toml`.
+
+Do not document router-local paths as public endpoints, promise a capability that the matrix does
+not mark available, or make an example depend on a sibling CorpusGen checkout. Examples for
+credentials, tokens, datasets, or models must use unmistakable non-secret placeholders and state
+the policy or runtime profile required to execute them.
+
 ## CorpusGen boundary
 
 Imports of `corpusgen` are permitted only below `src/corpuskit/adapters/corpusgen/`.

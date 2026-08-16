@@ -51,6 +51,11 @@ leaves the data visible for the guided review below. A passing run proves that r
 the external stack; it does not prove live provider, qualified GPU, vendor IdP, TLS Redis, or
 multi-replica behavior.
 
+The basic command above validates real run submission and persisted history but intentionally does
+not wait for execution. To demonstrate a completed CPU run and an adopted selection artifact,
+start the [durable profile](../getting-started.md#optional-use-durable-local-jobs) before the clock
+and submit the explicit Select run described below.
+
 ## Guided review (minutes 2–15)
 
 1. **Project and immutable source (2 minutes).** Open <http://127.0.0.1:3000/projects>. Select the
@@ -70,12 +75,14 @@ multi-replica behavior.
    returned composite, coverage-gain, phonotactic, fluency, and readability columns. Fluency is
    zero in this deterministic no-model surface; the **Advanced** fluency/perplexity run demonstrates
    exact-policy offline model-backed composite ranking when a local worker is configured.
-5. **Durable control plane and artifacts (2 minutes).** Open `/jobs`, wait for all ordered rows of
-   the selected immutable version to be verified, submit the default typed phonemize run, refresh,
-   and inspect its version lineage plus state/events. If a terminal run exposes an artifact link,
-   follow it: `/artifacts?artifact=<uuid>` fetches that exact artifact even when it is outside the
-   current list page. The core demo uses the inline backend; use the durable profile runbook when
-   demonstrating Temporal process recovery.
+5. **Run submission, history, and optional execution (2 minutes).** Open `/jobs`, wait for all
+   ordered rows of the selected immutable version to be verified, and inspect the automated
+   default phonemize run's version lineage plus state/events. In the basic profile the run remains
+   queued because no dispatcher or worker is running. With the durable profile, choose **Select**
+   under **Supported run kind**, keep the selected immutable version, clear **Explicit target
+   units** to use the derived target, submit, and wait for a terminal state. Follow **Inspect final
+   artifact**: `/artifacts?artifact=<uuid>` fetches that exact selection artifact even when it is
+   outside the current list page.
 
    The fixture has six rows and fits every atomic run contract. CorpusKit will not silently
    truncate a larger selected version: phonemize/evaluate stop at 500 rows and select at 2,000.
@@ -98,8 +105,8 @@ Pass only when the live Playwright command exits zero and the guided review show
 - one shared active project across routes and one immutable fixed corpus digest;
 - live evaluation plus at least the four core selectors on identical input;
 - explicit scoring weights with a backend result table;
-- a real submitted CPU run, PHOIBLE revision/digest, refreshed capability checks, quota usage,
-  and audit rows;
+- a real persisted run submission and initial event, PHOIBLE revision/digest, refreshed capability
+  checks, quota usage, and audit rows;
 - no intercepted/mock API responses, browser accessibility violations, or API 5xx responses.
 
 Record the git revision, container image digests, command output, and Playwright trace/report with

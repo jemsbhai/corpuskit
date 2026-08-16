@@ -1,7 +1,7 @@
 # CorpusKit
 
 CorpusKit is a production-oriented, multi-user corpus design workbench powered by
-[`corpusgen`](https://pypi.org/project/corpusgen/). It turns CorpusGen's linguistic
+[`CorpusGen`](https://github.com/jemsbhai/corpusgen/tree/v0.1.7). It turns CorpusGen's linguistic
 evaluation, optimization, generation, guidance, and training APIs into traceable,
 reproducible user workflows.
 
@@ -34,6 +34,35 @@ The comprehensive [getting-started guide](docs/getting-started.md) covers verifi
 corpus creation, ports, logs, updates, persistence and reset, common failures, durable local jobs,
 Windows/PowerShell commands, direct source development, and the production boundary.
 
+## CorpusKit and CorpusGen
+
+[CorpusGen](https://github.com/jemsbhai/corpusgen/tree/v0.1.7) is the standalone Python library
+and CLI that implements the linguistic algorithms. CorpusKit is the web application and control
+plane built around it. CorpusKit exact-pins
+[`corpusgen==0.1.7`](https://pypi.org/project/corpusgen/0.1.7/); repository CI and images resolve
+the hash-locked PyPI artifact from `uv.lock`. CorpusKit does not read a neighboring CorpusGen
+checkout, and production workflows do not invoke the CorpusGen CLI.
+
+| Choose | When you need |
+| --- | --- |
+| CorpusGen | Direct Python or CLI use in a script, notebook, or single-user terminal workflow |
+| CorpusKit | Shared projects, browser/HTTP workflows, immutable versions, identity and tenancy, durable jobs, quotas, artifacts, replay, and audit history |
+
+Read [CorpusKit and CorpusGen](docs/corpusgen-relationship.md) for the call boundary, ownership
+split, exact capability crosswalk, version policy, and a side-by-side evaluation. Continue with
+the [recipe cookbook](docs/recipes.md) for checked request bodies covering projects, G2P,
+inventories, evaluation, selection, repository preview, durable runs, CLI parity, and
+multilingual acceptance.
+
+## Documentation map
+
+- [Documentation home](docs/README.md): user, contributor, architecture, and operator paths.
+- [Getting started](docs/getting-started.md): first local stack and first immutable corpus.
+- [Recipe cookbook](docs/recipes.md): copy/paste browser and API tasks.
+- [CorpusKit and CorpusGen](docs/corpusgen-relationship.md): which project to use and how they fit.
+- [Capability matrix](docs/product/capability-matrix.md): authoritative implementation status.
+- [15-minute live demo](docs/product/15-minute-demo.md): fixed-input, no-mock acceptance tour.
+
 ## Product scope
 
 CorpusKit is designed for TTS/ASR dataset builders, speech researchers, clinical
@@ -59,7 +88,8 @@ For a fixed-input, no-mock walkthrough of the real local stack, use the
 
 - **Web:** Next.js 16, React 19, strict TypeScript, accessible server/client components.
 - **API:** Python 3.12, FastAPI, Pydantic, SQLAlchemy, and PostgreSQL.
-- **Compute:** a pinned `corpusgen==0.1.7` adapter running in bounded Temporal jobs.
+- **Compute:** a pinned `corpusgen==0.1.7` adapter used by bounded synchronous API operations and
+  profile-specific Temporal jobs.
 - **Artifacts:** immutable, content-addressed files in S3-compatible storage.
 - **Identity:** external OIDC; development/test demo mode uses a fixed isolated tenant and
   is rejected in staging and production. Provider tokens remain in encrypted server-side
@@ -135,7 +165,7 @@ backups.
 
 Only `src/corpuskit/adapters/corpusgen/` may import CorpusGen. This boundary is enforced
 by an architecture test because CorpusGen 0.1.7 is an alpha dependency with a small
-stable top-level API and a wider module-level advanced API.
+documented top-level API and a wider module-level advanced API.
 
 See [`docs/architecture/overview.md`](https://github.com/jemsbhai/corpuskit/blob/main/docs/architecture/overview.md) and the ADRs in
 [`docs/adr/`](https://github.com/jemsbhai/corpuskit/tree/main/docs/adr). The hardened production topology, immutable image and secret inputs,
@@ -150,7 +180,9 @@ claimed for this source candidate. From a checkout, use the locked environment:
 
 ```bash
 uv sync --frozen
+mkdir -p data artifacts
 uv run corpuskit-phoible provision
+CORPUSKIT_DATABASE_URL=sqlite+aiosqlite:///./data/corpuskit.db \
 uv run corpuskit-db upgrade
 uv run corpuskit-api
 ```
@@ -160,13 +192,15 @@ API install is:
 
 ```bash
 python -m pip install "corpuskit-app==0.1.0a1"
+mkdir -p data artifacts
 corpuskit-phoible provision
+CORPUSKIT_DATABASE_URL=sqlite+aiosqlite:///./data/corpuskit.db \
 corpuskit-db upgrade
 corpuskit-api
 ```
 
 `corpuskit-api` binds to `127.0.0.1` by default and starts in the development-only demo posture;
-it is not a shared or production deployment. Optional worker dependencies are explicit:
+it is not a shared or production deployment. Optional runtime dependencies are explicit:
 
 ```bash
 python -m pip install "corpuskit-app[optimization]==0.1.0a1"  # ILP / NSGA-II
