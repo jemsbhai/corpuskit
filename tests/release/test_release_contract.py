@@ -640,7 +640,7 @@ def test_python_images_use_the_pinned_ubuntu_runtime_contract(
         "CA_CERTIFICATES_VERSION": "20260601~24.04.1",
         "ESPEAK_NG_VERSION": "1.51+dfsg-12build1",
         "ACCOUNT_TOOLS_PACKAGE_VERSION": "1:4.13+dfsg1-4ubuntu3.2",
-        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.15",
+        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.16",
     }
     for argument, value in expected_arguments.items():
         assert f"ARG {argument}={value}" in text
