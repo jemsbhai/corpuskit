@@ -602,6 +602,7 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
             "sha256:c2cc26d8f991c2db236ad51a61efee843c482372d6d22570787309d511694110"
         ),
         "NPM_VERSION": "11.16.0",
+        "OPENSSL_PACKAGE_VERSION": "3.5.8-r0",
     }.items():
         assert f"ARG {argument}={value}" in text
 
@@ -615,6 +616,9 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
     )
     assert 'npm install --global "npm@${NPM_VERSION}" --ignore-scripts' in dependencies
     assert 'test "$(npm --version)" = "${NPM_VERSION}"' in dependencies
+    assert text.count("apk add --no-cache --upgrade") == 2
+    assert text.count('"libcrypto3=${OPENSSL_PACKAGE_VERSION}"') == 2
+    assert text.count('"libssl3=${OPENSSL_PACKAGE_VERSION}"') == 2
     assert "npm install" not in runtime
     assert "rm -rf /usr/local/lib/node_modules/npm" in runtime
     assert "rm -f /usr/local/bin/npm /usr/local/bin/npx" in runtime
@@ -640,7 +644,7 @@ def test_python_images_use_the_pinned_ubuntu_runtime_contract(
         "CA_CERTIFICATES_VERSION": "20260601~24.04.1",
         "ESPEAK_NG_VERSION": "1.51+dfsg-12build1",
         "ACCOUNT_TOOLS_PACKAGE_VERSION": "1:4.13+dfsg1-4ubuntu3.2",
-        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.15",
+        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.16",
     }
     for argument, value in expected_arguments.items():
         assert f"ARG {argument}={value}" in text
