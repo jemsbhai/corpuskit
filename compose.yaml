@@ -2,7 +2,7 @@ name: corpuskit
 
 services:
   postgres:
-    image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
     restart: unless-stopped
     environment:
       POSTGRES_DB: corpuskit
