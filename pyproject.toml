@@ -59,7 +59,7 @@ Issues = "https://github.com/jemsbhai/corpuskit/issues"
 Repository = "https://github.com/jemsbhai/corpuskit"
 
 [build-system]
-requires = ["hatchling==1.32.0"]
+requires = ["hatchling==1.32.3"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
@@ -73,12 +73,12 @@ only-include = ["src", "CHANGELOG.md"]
 
 [dependency-groups]
 build = [
-  "hatchling==1.32.0",
+  "hatchling==1.32.3",
 ]
 dev = [
   "diff-cover>=9,<10",
   "hypothesis>=6.138,<7",
-  "mutmut==3.7.0",
+  "mutmut==3.8.0",
   "mypy>=1.17,<2",
   "pip-audit>=2.9,<3",
   "psutil==7.2.2",
