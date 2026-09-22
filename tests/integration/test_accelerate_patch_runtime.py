@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts.security.accelerate_patch import verify_installed
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts.security.accelerate_patch import verify_installed  # noqa: E402
 
 torch = pytest.importorskip("torch", reason="the local-model profile requires PyTorch")
 accelerate = pytest.importorskip("accelerate", reason="the local-model profile requires Accelerate")

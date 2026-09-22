@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-from scripts.security import audit_dependencies as audit
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from scripts.security import audit_dependencies as audit  # noqa: E402
 
 
 @pytest.fixture

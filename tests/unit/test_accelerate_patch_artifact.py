@@ -7,14 +7,17 @@ import importlib.metadata
 import io
 import json
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from scripts.security import accelerate_patch as patch
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+
+from scripts.security import accelerate_patch as patch  # noqa: E402
 
 
 @pytest.fixture
