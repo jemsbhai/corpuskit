@@ -34,9 +34,11 @@ jobs:
           workflow_runs="$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
+          # Pull-request runs test a synthetic merge commit, not their reported head_sha.
           jq -e --arg sha "${SOURCE_SHA}" '
             [.workflow_runs[]
               | select(.head_sha == $sha)
+              | select(.event == "push" or .event == "workflow_dispatch")
               | select(.conclusion == "success")]
             | length > 0
           ' <<<"${workflow_runs}" >/dev/null

@@ -88,6 +88,11 @@ published size/ETag, the pristine wheel RECORD digest, and a canonical installed
 digest. The latter removes only the five known path-dependent rows added by the pinned uv
 installer; all original wheel manifest rows remain attested.
 
+The Windows lock also selects the checked-in Accelerate checkpoint-loader repair. Provision
+from the repository root so the relative wheel path resolves. Qualification rebuilds and
+verifies the artifact before installation, then verifies installed files and RECORD entries
+before running GPU acceptance. Its provenance is retained in `accelerate-verification.json`.
+
 The Windows Torch pin was independently derived from the official PyTorch `cu132` index and
 artifact on 2026-08-12. The downloaded 1,917,946,849-byte wheel matched the published
 `aae695147d9f3c9a62f5d4e684569b73-229` ETag and hashes to
