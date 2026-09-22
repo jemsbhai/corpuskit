@@ -630,7 +630,7 @@ provides-extras = ["optimization", "repository", "llm", "local", "worker-batch",
 [package.metadata.requires-dev]
 build = [{ name = "hatchling", specifier = "==1.32.0" }]
 dev = [
-    { name = "diff-cover", specifier = ">=9,<10" },
+    { name = "diff-cover", specifier = ">=9,<11" },
     { name = "hypothesis", specifier = ">=6.138,<7" },
     { name = "mutmut", specifier = "==3.7.0" },
     { name = "mypy", specifier = ">=1.17,<2" },
