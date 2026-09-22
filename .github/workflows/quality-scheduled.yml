@@ -294,23 +294,23 @@ jobs:
         run: |
           docker build --provenance=false --sbom=false \
             --file docker/mutation.Dockerfile \
-            --tag corpuskit-mutation:3.7.0 .
+            --tag corpuskit-mutation:3.8.0 .
 
       - name: Prove image and mounted-checkout runtime identities are non-root
         shell: bash
         run: |
           set -euo pipefail
-          test "$(docker image inspect --format '{{.Config.User}}' corpuskit-mutation:3.7.0)" = "10001:10001"
+          test "$(docker image inspect --format '{{.Config.User}}' corpuskit-mutation:3.8.0)" = "10001:10001"
           test "$(id -u)" -ne 0
           docker run --rm --network none \
             --user "$(id -u):$(id -g)" \
-            --entrypoint sh corpuskit-mutation:3.7.0 \
+            --entrypoint sh corpuskit-mutation:3.8.0 \
             -ceu 'test "$(id -u)" -ne 0'
 
       - name: Scan mutation runner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: corpuskit-mutation:3.7.0
+          image-ref: corpuskit-mutation:3.8.0
           version: ${{ env.TRIVY_VERSION }}
           scanners: vuln,misconfig
           severity: HIGH,CRITICAL
@@ -325,7 +325,7 @@ jobs:
             docker run --rm --network none \
               --user "$(id -u):$(id -g)" \
               --mount "type=bind,source=${PWD},target=/workspace" \
-              corpuskit-mutation:3.7.0 run
+              corpuskit-mutation:3.8.0 run
 
       - name: Enforce conservative overall and critical scores
         shell: bash
@@ -336,7 +336,7 @@ jobs:
             --user "$(id -u):$(id -g)" \
             --mount "type=bind,source=${PWD},target=/workspace" \
             --entrypoint python \
-            corpuskit-mutation:3.7.0 \
+            corpuskit-mutation:3.8.0 \
             -m scripts.mutation.check_score \
             --mutants-root mutants \
             --output artifacts/mutation/evidence.json \

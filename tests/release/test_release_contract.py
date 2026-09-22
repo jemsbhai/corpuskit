@@ -165,7 +165,7 @@ def test_release_build_backend_is_exactly_pinned_and_locked() -> None:
     build_requirements = project["build-system"]["requires"]
     build_group = project["dependency-groups"]["build"]
 
-    assert build_requirements == ["hatchling==1.32.0"]
+    assert build_requirements == ["hatchling==1.32.3"]
     assert build_group == build_requirements
 
     locked = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
@@ -174,11 +174,11 @@ def test_release_build_backend_is_exactly_pinned_and_locked() -> None:
     )
     assert application["dev-dependencies"]["build"] == [{"name": "hatchling"}]
     assert application["metadata"]["requires-dev"]["build"] == [
-        {"name": "hatchling", "specifier": "==1.32.0"}
+        {"name": "hatchling", "specifier": "==1.32.3"}
     ]
 
     hatchling = [package for package in locked["package"] if package["name"] == "hatchling"]
-    assert [package["version"] for package in hatchling] == ["1.32.0"]
+    assert [package["version"] for package in hatchling] == ["1.32.3"]
     assert hatchling[0]["sdist"]["hash"].startswith("sha256:")
     assert hatchling[0]["wheels"]
     assert all(wheel["hash"].startswith("sha256:") for wheel in hatchling[0]["wheels"])
@@ -191,7 +191,7 @@ def test_release_build_uses_only_the_frozen_nonisolated_build_group() -> None:
     assert "uv lock --check" in workflow
     assert "uv sync --frozen --only-group build --no-install-project" in workflow
     assert 'source "${UV_PROJECT_ENVIRONMENT}/bin/activate"' in workflow
-    assert 'metadata.version("hatchling") == "1.32.0"' in workflow
+    assert 'metadata.version("hatchling") == "1.32.3"' in workflow
     assert "uv build --no-sources --no-build-isolation --no-index --out-dir dist" in workflow
     assert "uv build --no-sources --out-dir dist" not in workflow
 
