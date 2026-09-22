@@ -6,10 +6,12 @@
 # torch-wheel-sha256=0bcf7ae00b2e20ef2b53af2e764a4fd8646b913bfaaeba2b9c975e672e8c7902
 # torch-wheel-record-sha256=f8b0f86cacb13585da12fec801316550b82f45863b80117de148593c9f02d8d1
 # torch-record-canonical-sha256=bcca40a4130fe52ab0acdbdd96498217d6acb7f3a948455fd4172df401ca7907
-# Provision into a dedicated virtual environment with:
+# Provision from the repository root into a dedicated virtual environment with:
+# python scripts/security/accelerate_patch.py rebuild-check
 # uv pip sync --python <python.exe> scripts/gpu/windows-cu132-v1.lock.txt
 # uv pip install --python <python.exe> --no-deps .
-accelerate==1.14.0
+# <python.exe> scripts/security/accelerate_patch.py verify-installed
+./vendor/accelerate/accelerate-1.15.0+corpuskit.1-py3-none-any.whl
 aiosqlite==0.22.1
 alembic==1.19.1
 annotated-doc==0.0.5

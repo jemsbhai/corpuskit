@@ -12,3 +12,7 @@
 *.webp binary
 *.woff binary
 *.woff2 binary
+*.whl binary
+
+# Unified diffs encode empty context lines as a single space, including at EOF.
+vendor/accelerate/*.patch whitespace=-blank-at-eol,-blank-at-eof

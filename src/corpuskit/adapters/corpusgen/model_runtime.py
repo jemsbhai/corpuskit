@@ -72,6 +72,7 @@ from corpuskit.domain.phon_rl import MAX_RL_CHECKPOINT_BYTES, PhonRlCheckpointCo
 _MILLION = Decimal(1_000_000)
 _DIGEST_CHUNK_BYTES = 4 * 1024 * 1024
 _MAX_SNAPSHOT_FILES = 10_000
+_MAX_CHECKPOINT_INDEX_BYTES = 16 * 1024 * 1024
 _MAX_PEFT_CONFIG_BYTES = 256 * 1024
 _UNSAFE_WEIGHT_SUFFIXES = frozenset({".bin", ".pkl", ".pickle", ".pt", ".pth"})
 
@@ -460,19 +461,30 @@ def compute_snapshot_digest(snapshot: Path, *, approved_cache_root: Path) -> str
         snapshot = snapshot.resolve(strict=True)
         if not snapshot.is_dir() or not snapshot.is_relative_to(approved_root):
             raise EngineUnavailableError("model_runtime.local.snapshot")
-        files = tuple(sorted(item for item in snapshot.rglob("*") if item.is_file()))
+        entries = tuple(snapshot.rglob("*"))
+        if any(
+            (item.is_dir() and item.is_symlink()) or (not item.is_dir() and not item.is_file())
+            for item in entries
+        ):
+            raise EngineUnavailableError("model_runtime.local.snapshot_boundary")
+        files = tuple(sorted(item for item in entries if item.is_file()))
         if not files or len(files) > _MAX_SNAPSHOT_FILES:
             raise EngineUnavailableError("model_runtime.local.snapshot")
         if any(item.suffix.casefold() in _UNSAFE_WEIGHT_SUFFIXES for item in files):
             raise EngineUnavailableError("model_runtime.local.unsafe_weights")
         if not any(item.suffix.casefold() == ".safetensors" for item in files):
             raise EngineUnavailableError("model_runtime.local.safetensors_required")
+        verified_paths = frozenset(files)
         manifest = hashlib.sha256(b"corpuskit.snapshot.v1\0")
         for item in files:
             relative = item.relative_to(snapshot).as_posix().encode()
             resolved_item = item.resolve(strict=True)
             if not resolved_item.is_file() or not resolved_item.is_relative_to(approved_root):
                 raise EngineUnavailableError("model_runtime.local.snapshot_boundary")
+            if item.name.endswith(".index.json"):
+                _validate_checkpoint_index(
+                    item, verified_paths=verified_paths, approved_root=approved_root
+                )
             file_digest = hashlib.sha256()
             size = 0
             with resolved_item.open("rb") as stream:
@@ -488,6 +500,47 @@ def compute_snapshot_digest(snapshot: Path, *, approved_cache_root: Path) -> str
         raise
     except (OSError, ValueError, OverflowError):
         raise EngineUnavailableError("model_runtime.local.snapshot") from None
+
+
+def _validate_checkpoint_index(
+    index_path: Path, *, verified_paths: frozenset[Path], approved_root: Path
+) -> None:
+    """Require sharded weights to name regular safetensors inside the verified snapshot."""
+
+    operation = "model_runtime.local.shard_index"
+    with index_path.open("rb") as stream:
+        raw = stream.read(_MAX_CHECKPOINT_INDEX_BYTES + 1)
+    if len(raw) > _MAX_CHECKPOINT_INDEX_BYTES:
+        raise EngineUnavailableError(operation)
+    try:
+        index = json.loads(raw)
+    except (UnicodeError, ValueError, RecursionError):
+        raise EngineUnavailableError(operation) from None
+    if not isinstance(index, dict):
+        raise EngineUnavailableError(operation)
+    weight_map = index.get("weight_map", index)
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise EngineUnavailableError(operation)
+    for shard in weight_map.values():
+        if (
+            not isinstance(shard, str)
+            or not shard
+            or "\x00" in shard
+            or "\\" in shard
+            or ":" in shard
+            or Path(shard).is_absolute()
+            or ".." in Path(shard).parts
+            or Path(shard).suffix != ".safetensors"
+        ):
+            raise EngineUnavailableError(operation)
+        logical_shard = index_path.parent / shard
+        resolved_shard = logical_shard.resolve(strict=True)
+        if (
+            logical_shard not in verified_paths
+            or not resolved_shard.is_relative_to(approved_root)
+            or not resolved_shard.is_file()
+        ):
+            raise EngineUnavailableError(operation)
 
 
 class CachedLocalModelLoader:
