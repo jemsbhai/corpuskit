@@ -116,6 +116,10 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["corpuskit"]
+# pytest-cov 7 delegates spawned-process collection to coverage.py. Save child
+# measurements both on normal multiprocessing exit and our runner's termination.
+patch = ["subprocess", "_exit"]
+sigterm = true
 
 [tool.coverage.report]
 fail_under = 90
