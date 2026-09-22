@@ -83,6 +83,7 @@ jobs:
 
       - name: Verify lock and install
         run: |
+          python -m scripts.security.accelerate_patch rebuild-check
           uv lock --check
           uv sync --frozen --all-groups --extra optimization --extra llm
 
@@ -134,6 +135,13 @@ jobs:
             --compare-branch "origin/${BASE_REF}" \
             --fail-under=95
 
+      - name: Audit Python dependencies
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes \
+            --format requirements-txt --output-file /tmp/runtime-requirements.txt
+          uv run python -m scripts.security.audit_dependencies /tmp/runtime-requirements.txt \
+            --output reports/security/runtime.json
+
       - name: Preserve backend test and coverage evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -141,16 +149,11 @@ jobs:
           name: backend-quality-${{ github.sha }}
           path: |
             reports/backend-junit.xml
+            reports/security
             coverage.xml
             coverage.json
           if-no-files-found: error
           retention-days: 14
-
-      - name: Audit Python dependencies
-        run: |
-          uv export --frozen --no-dev --no-emit-project --no-hashes \
-            --format requirements-txt --output-file /tmp/runtime-requirements.txt
-          uv run pip-audit --requirement /tmp/runtime-requirements.txt
 
   migrations:
     name: PostgreSQL migrations and schema drift
@@ -453,7 +456,7 @@ jobs:
             --tmpfs /data:rw,noexec,nodev,nosuid,size=256m \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
             server /data --address :9000
           for _attempt in $(seq 1 30); do
             if docker exec corpuskit-temporal-ci temporal operator cluster health \
@@ -723,8 +726,18 @@ jobs:
           for profile in worker-batch worker-external-provider worker-gpu-inference worker-gpu-training; do
             uv export --frozen --extra "$profile" --no-dev --no-emit-project --no-hashes \
               --format requirements-txt --output-file "/tmp/$profile-requirements.txt"
-            uv run pip-audit --requirement "/tmp/$profile-requirements.txt"
+            uv run python -m scripts.security.audit_dependencies "/tmp/$profile-requirements.txt" \
+              --output "reports/security/$profile.json"
           done
+
+      - name: Preserve worker security audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: worker-security-${{ github.sha }}
+          path: reports/security
+          if-no-files-found: warn
+          retention-days: 14
 
   local-model-runtime:
     name: Offline local model runtime
@@ -779,6 +792,7 @@ jobs:
           mkdir -p reports/local-model
           uv run pytest \
             tests/integration/test_real_tiny_model_runtime.py \
+            tests/integration/test_accelerate_patch_runtime.py \
             tests/integration/test_datg_publication.py::test_real_offline_transformers_index_publish_inspect_and_logit_preview \
             tests/unit/test_phon_rl_adapter.py::test_ppo_public_primitives_match_hand_computed_goldens_and_masks \
             tests/unit/test_phon_rl_adapter.py::test_value_head_real_torch_is_seeded_cpu_and_supports_both_ranks \
@@ -793,7 +807,17 @@ jobs:
         run: |
           uv export --frozen --extra local --no-dev --no-emit-project --no-hashes \
             --format requirements-txt --output-file /tmp/local-runtime-requirements.txt
-          uv run pip-audit --requirement /tmp/local-runtime-requirements.txt
+          uv run python -m scripts.security.audit_dependencies /tmp/local-runtime-requirements.txt \
+            --verify-installed-accelerate --output reports/security/local.json
+
+      - name: Preserve local-model security audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: local-model-security-${{ github.sha }}
+          path: reports/security
+          if-no-files-found: warn
+          retention-days: 14
 
   frontend:
     name: Frontend quality and tests

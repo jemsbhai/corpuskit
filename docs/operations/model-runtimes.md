@@ -174,6 +174,31 @@ links escaping the root are rejected. Mount the approved cache root read-only fo
 verify-and-load operation—an immutable Hub revision cannot prevent local mutation or close a
 verify/load race on a writable mount.
 
+Checkpoint `*.index.json` files are also checked before loading. Each shard reference must be a
+relative safetensors path included in the snapshot manifest; absolute paths, parent traversal,
+missing files, directory links, and non-regular files are rejected. Ordinary file symlinks into
+the approved Hub blob cache remain supported. Index JSON is limited to 16 MiB. This verification
+is shared by local model loading, DATG, and phon-RL snapshot preparation.
+
+The locked local-worker profiles use the downstream build `accelerate==1.15.0+corpuskit.1` to
+repair [CVE-2026-69112 / PYSEC-2026-3804](https://github.com/advisories/GHSA-4j2p-28q2-5m79)
+inside Accelerate's checkpoint loader as well as at CorpusKit's snapshot boundary. Upstream
+1.15.0 still contains the unsafe loader; a version bump alone is not the fix.
+
+[`vendor/accelerate`](../../vendor/accelerate/) records the upstream wheel URL and hash, the
+reviewable source patch, license, and reproducible patched wheel. CI rebuilds and verifies the
+artifact, runs adversarial tests against the real patched loader, and audits the complete locked
+dependency graph. The audit verifies the patched artifact before querying its upstream package
+identity; it rejects missing or skipped dependencies, any vulnerability finding, and artifact
+drift. It does not ignore this advisory or exempt the package from future vulnerability checks.
+
+Use the repository's frozen uv environment or the built worker images for local-model profiles.
+Plain `pip install` does not consume `[tool.uv.sources]` and therefore does not install the
+downstream Accelerate patch. Application snapshot checks remain enforced in either case, but
+only the locked profile provides the verified patched dependency. Replace the downstream build
+only after verifying that an upstream release repairs the same traversal and non-regular-file
+cases and passes the regression suite.
+
 Local generation accepts a bounded seed, applies it through Transformers immediately before the
 CorpusGen loop, and records it with sampling mode in the manifest. It remains `best_effort` even
 when sampling is disabled: a seed and exact revision do not guarantee bitwise determinism across
@@ -209,9 +234,9 @@ URL, branch, artifact digest, or secret.
 - External-provider workers: install `corpuskit-app[worker-external-provider]`, provide eSpeak for
   generated-text G2P, configure exact hosted-model and/or Hugging Face repository allowlists, and
   allow only the selected provider or allowlisted repository egress.
-- Local CPU workers: install `corpuskit-app[local]`, provision the exact safetensors snapshot and eSpeak,
+- Local CPU workers: use `uv sync --frozen --extra local`, provision the exact safetensors snapshot and eSpeak,
   and size RAM for the selected model.
-- Local GPU workers: install `corpuskit-app[worker-gpu-inference]` and pin/qualify CUDA, PyTorch,
+- Local GPU workers: use `uv sync --frozen --extra worker-gpu-inference` and pin/qualify CUDA, PyTorch,
   transformers, bitsandbytes, driver, GPU, and quantization combinations.
 - No live provider request, downloaded model, or GPU smoke is part of the base test run. Those remain
   explicit release-profile gates; fakes cannot establish model quality, provider availability, real

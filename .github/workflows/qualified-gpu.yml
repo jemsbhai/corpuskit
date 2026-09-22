@@ -167,12 +167,26 @@ jobs:
           enable-cache: true
           cache-dependency-glob: scripts/gpu/windows-cu132-v1.lock.txt
 
+      - name: Verify the downstream Accelerate artifact before installation
+        shell: pwsh
+        run: python -m scripts.security.accelerate_patch rebuild-check
+
       - name: Provision the isolated exact CUDA profile
         shell: pwsh
         run: |
           uv venv .qualified-gpu --python 3.12.12
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv pip sync --python .qualified-gpu/Scripts/python.exe scripts/gpu/windows-cu132-v1.lock.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv pip install --python .qualified-gpu/Scripts/python.exe --no-deps .
+
+      - name: Verify the installed patched Accelerate files and retain provenance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/qualified-gpu | Out-Null
+          $verification = .qualified-gpu/Scripts/python.exe scripts/security/accelerate_patch.py verify-installed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $verification | Set-Content -Encoding utf8 artifacts/qualified-gpu/accelerate-verification.json
 
       - name: Run qualified inference, 4-bit/8-bit quantization, and two-phase PEFT chain offline
         shell: pwsh

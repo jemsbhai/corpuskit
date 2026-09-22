@@ -37,11 +37,16 @@ dependencies = [
 optimization = ["corpusgen[optimization]==0.1.7"]
 repository = ["corpusgen[repository]==0.1.7"]
 llm = ["corpusgen[llm]==0.1.7"]
-local = ["corpusgen[local]==0.1.7"]
-worker-batch = ["corpusgen[local,optimization]==0.1.7"]
+local = ["corpusgen[local]==0.1.7", "accelerate==1.15.0"]
+worker-batch = ["corpusgen[local,optimization]==0.1.7", "accelerate==1.15.0"]
 worker-external-provider = ["corpusgen[llm,repository]==0.1.7"]
-worker-gpu-inference = ["corpusgen[local]==0.1.7"]
-worker-gpu-training = ["corpusgen[local]==0.1.7"]
+worker-gpu-inference = ["corpusgen[local]==0.1.7", "accelerate==1.15.0"]
+worker-gpu-training = ["corpusgen[local]==0.1.7", "accelerate==1.15.0"]
+
+[tool.uv.sources]
+# Reproducible downstream checkpoint-loader fix; provenance and audit verification
+# live alongside the artifact. Do not substitute the unpatched upstream wheel.
+accelerate = { path = "vendor/accelerate/accelerate-1.15.0+corpuskit.1-py3-none-any.whl" }
 
 [project.scripts]
 corpuskit-api = "corpuskit.api.cli:main"

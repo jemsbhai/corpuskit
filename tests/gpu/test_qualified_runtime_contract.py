@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -27,6 +28,7 @@ from scripts.gpu.qualified_runtime_acceptance import (  # noqa: E402
     _parser,
     _read_training_receipt,
     _rl_contract,
+    _verify_windows_accelerate,
     _write_training_receipt,
     canonical_torch_record_sha256,
     main,
@@ -57,6 +59,7 @@ def test_windows_cuda_profile_is_exact_and_substantive() -> None:
     packages = parse_windows_profile_lock(lock_text)
     assert len(packages) == 81
     assert packages["torch"] == "2.13.0+cu132"
+    assert packages["accelerate"] == "1.15.0+corpuskit.1"
     assert packages["corpusgen"] == "0.1.7"
     assert packages["transformers"] == "5.15.0"
     assert packages["safetensors"] == "0.8.0"
@@ -80,6 +83,50 @@ def test_windows_cuda_profile_is_exact_and_substantive() -> None:
         "uv pip sync --python .qualified-gpu/Scripts/python.exe "
         "scripts/gpu/windows-cu132-v1.lock.txt"
     ) in workflow
+    artifact_check = workflow.index("python -m scripts.security.accelerate_patch rebuild-check")
+    profile_install = workflow.index("uv pip sync --python .qualified-gpu/Scripts/python.exe")
+    installed_check = workflow.index("scripts/security/accelerate_patch.py verify-installed")
+    assert artifact_check < profile_install < installed_check
+    assert "artifacts/qualified-gpu/accelerate-verification.json" in workflow
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "accelerate==1.14.0",
+        "accelerate==1.15.0",
+        "accelerate==1.15.0+corpuskit.1",
+        "./other/accelerate-1.15.0+corpuskit.1-py3-none-any.whl",
+        "accelerate @ https://example.invalid/accelerate.whl",
+        "",
+    ],
+)
+def test_windows_cuda_profile_rejects_missing_or_unreviewed_accelerate(replacement: str) -> None:
+    original = PROFILE_LOCK.read_text(encoding="utf-8")
+    changed = original.replace(
+        "./vendor/accelerate/accelerate-1.15.0+corpuskit.1-py3-none-any.whl", replacement
+    )
+    with pytest.raises(RuntimeError, match=r"profile|artifact"):
+        parse_windows_profile_lock(changed)
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_windows_cuda_profile_verifies_installed_accelerate_before_acceptance(
+    monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    def verify(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command[0] == sys.executable
+        assert Path(command[1]) == REPOSITORY_ROOT / "scripts/security/accelerate_patch.py"
+        assert command[2] == "verify-installed"
+        assert kwargs["cwd"] == REPOSITORY_ROOT
+        return subprocess.CompletedProcess(command, returncode, "", "")
+
+    monkeypatch.setattr("scripts.gpu.qualified_runtime_acceptance.subprocess.run", verify)
+    if returncode:
+        with pytest.raises(RuntimeError, match="Accelerate verification failed"):
+            _verify_windows_accelerate()
+    else:
+        _verify_windows_accelerate()
 
 
 def test_windows_cuda_profile_rejects_changed_official_wheel_hash() -> None:
