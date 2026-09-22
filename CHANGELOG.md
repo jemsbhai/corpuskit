@@ -14,6 +14,19 @@ All notable changes to CorpusKit will be documented here. The project follows
   imports, with parent lineage, atomic quota accounting, audit evidence, API contracts, and an
   accessible project-workbench flow.
 
+### Fixed
+
+- Refresh the Ubuntu Python package revision and use Quay for the existing pinned MinIO images
+  so clean container builds and Compose startup can resolve their dependencies.
+- Update frontend dependencies affected by the Next.js, Vitest, js-yaml, and sharp security
+  advisories reported by CI.
+- Validate sharded model checkpoint references before loading local models, rejecting paths
+  outside the verified snapshot and non-regular files. Ship a reproducible downstream Accelerate
+  loader patch with verified artifact provenance and complete dependency-audit coverage.
+- Require successful CI that actually tested the candidate commit before accepting scheduled
+  quality evidence; pull-request merge checks alone do not establish branch-head evidence.
+- Use Dependabot's uv ecosystem so Python updates include the matching lockfile.
+
 ## [0.1.0-alpha.1] - 2026-08-12
 
 ### Added

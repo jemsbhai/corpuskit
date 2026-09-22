@@ -132,6 +132,8 @@ _TORCH_WHEEL_URL = (
     "https://download-r2.pytorch.org/whl/cu132/torch-2.13.0%2Bcu132-cp312-cp312-win_amd64.whl"
 )
 _TORCH_WHEEL_SHA256 = "0bcf7ae00b2e20ef2b53af2e764a4fd8646b913bfaaeba2b9c975e672e8c7902"
+_ACCELERATE_VERSION = "1.15.0+corpuskit.1"
+_ACCELERATE_WHEEL = f"./vendor/accelerate/accelerate-{_ACCELERATE_VERSION}-py3-none-any.whl"
 _TORCH_WHEEL_RECORD_SHA256 = "f8b0f86cacb13585da12fec801316550b82f45863b80117de148593c9f02d8d1"
 _TORCH_RECORD_CANONICAL_SHA256 = "bcca40a4130fe52ab0acdbdd96498217d6acb7f3a948455fd4172df401ca7907"
 _UV_TORCH_RECORD_ADDITIONS = frozenset(
@@ -1640,6 +1642,7 @@ def _validate_windows_profile(lock_text: str) -> int:
     if platform.python_version() != "3.12.12":
         raise RuntimeError("the isolated CUDA profile requires exact Python 3.12.12")
     expected = parse_windows_profile_lock(lock_text)
+    _verify_windows_accelerate()
     lock_lines = {line.strip() for line in lock_text.splitlines()}
     if (
         f"# torch-wheel-sha256={_TORCH_WHEEL_SHA256}" not in lock_lines
@@ -1728,21 +1731,44 @@ def _validate_uv_torch_install_metadata(record_path: Path) -> None:
         raise RuntimeError("installed Torch direct artifact hash does not match")
 
 
+def _verify_windows_accelerate() -> None:
+    """Verify the exact downstream wheel and its installed bytes before qualifying the profile."""
+
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(  # noqa: S603 - fixed verifier and interpreter from this process.
+        [sys.executable, str(root / "scripts/security/accelerate_patch.py"), "verify-installed"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("isolated profile patched Accelerate verification failed")
+
+
 def parse_windows_profile_lock(lock_text: str) -> dict[str, str]:
-    """Parse only exact package pins and the one approved CUDA wheel artifact."""
+    """Parse exact package pins and only the approved CUDA and patched Accelerate artifacts."""
 
     expected: dict[str, str] = {}
     for raw_line in lock_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if " @ " in line:
+        if line == _ACCELERATE_WHEEL:
+            name, version = "accelerate", _ACCELERATE_VERSION
+        elif " @ " in line:
             name, url = line.split(" @ ", maxsplit=1)
             if name != "torch" or url != f"{_TORCH_WHEEL_URL}#sha256={_TORCH_WHEEL_SHA256}":
                 raise RuntimeError("unsupported direct artifact in isolated profile")
             version = "2.13.0+cu132"
         elif "==" in line:
             name, version = line.split("==", maxsplit=1)
+            if re.sub(r"[-_.]+", "-", name).lower() == "accelerate":
+                raise RuntimeError(
+                    "isolated profile requires the verified patched Accelerate wheel"
+                )
         else:
             raise RuntimeError("isolated profile entries must be exact pins")
         normalized_name = re.sub(r"[-_.]+", "-", name).lower()
@@ -1751,6 +1777,8 @@ def parse_windows_profile_lock(lock_text: str) -> dict[str, str]:
         expected[normalized_name] = version
     if len(expected) < 70:
         raise RuntimeError("isolated profile is unexpectedly incomplete")
+    if expected.get("accelerate") != _ACCELERATE_VERSION:
+        raise RuntimeError("isolated profile is missing the patched Accelerate wheel")
     return expected
 
 
