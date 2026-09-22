@@ -263,7 +263,7 @@ def test_ci_service_and_direct_run_images_are_digest_pinned() -> None:
     assert (
         len(
             re.findall(
-                r"minio/minio:RELEASE\.2025-09-07T16-13-09Z@sha256:[0-9a-f]{64}",
+                r"quay\.io/minio/minio:RELEASE\.2025-09-07T16-13-09Z@sha256:[0-9a-f]{64}",
                 workflow,
             )
         )
@@ -469,6 +469,17 @@ def test_macos_local_model_job_provisions_pinned_phoible_before_acceptance() -> 
     assert ".actual_bytes == .expected_bytes" in provision
 
 
+def test_dependabot_updates_the_python_manifest_and_uv_lock_together() -> None:
+    config = yaml.safe_load(DEPENDABOT_CONFIG.read_text(encoding="utf-8"))
+    python_updates = [
+        (update["package-ecosystem"], update["directory"])
+        for update in config["updates"]
+        if update["package-ecosystem"] in {"pip", "uv"}
+    ]
+
+    assert python_updates == [("uv", "/")]
+
+
 def test_dependabot_uses_real_compose_and_dockerfile_manifests() -> None:
     config = yaml.safe_load(DEPENDABOT_CONFIG.read_text(encoding="utf-8"))
     container_updates = {
@@ -644,7 +655,7 @@ def test_python_images_use_the_pinned_ubuntu_runtime_contract(
         "CA_CERTIFICATES_VERSION": "20260601~24.04.1",
         "ESPEAK_NG_VERSION": "1.51+dfsg-12build1",
         "ACCOUNT_TOOLS_PACKAGE_VERSION": "1:4.13+dfsg1-4ubuntu3.2",
-        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.16",
+        "PYTHON_PACKAGE_VERSION": "3.12.3-1ubuntu0.17",
     }
     for argument, value in expected_arguments.items():
         assert f"ARG {argument}={value}" in text

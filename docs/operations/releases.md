@@ -44,6 +44,14 @@ reviewed dependency change. The web build verifies the pinned npm release in its
 the standalone production runtime contains Node but removes npm and npx because it does not
 install packages at runtime.
 
+Local-model worker images install the checked-in downstream Accelerate build from
+`vendor/accelerate` through the frozen uv lock and source mapping. CI verifies its provenance,
+rebuilds the wheel, tests its checkpoint-loader repair, and audits every dependency without
+silently skipping local artifacts. See [the model-runtime contract](model-runtimes.md) before
+changing or removing that override. Published Python metadata is built with `--no-sources`;
+plain pip installs do not include uv's downstream artifact selection. Deploy local-model workers
+from the qualified images or frozen repository environment to preserve that repair.
+
 ## One-time GitHub configuration
 
 An administrator must complete and record all of these controls before creating a tag:
@@ -78,6 +86,10 @@ GitHub documents [immutable releases](https://docs.github.com/en/code-security/c
 and [protected environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
 
 ## Pinned release toolchain
+
+Dependabot uses the `uv` ecosystem so Python dependency updates regenerate `pyproject.toml`
+and `uv.lock` together. Pinned build-tool updates must also update the release assertions that
+verify those versions.
 
 Every action reference is a full 40-character commit SHA. The adjacent version comment is for
 review and update automation only. These versions and their release commits were checked against
