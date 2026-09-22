@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from inspect import signature
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from temporalio.client import Client
+from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 
 from corpuskit.config import Settings
 from corpuskit.domain.jobs import RunKind
@@ -22,7 +25,12 @@ from corpuskit.workflows.handlers import (
     SelectRunSpec,
     build_core_handler_registry,
 )
-from corpuskit.workflows.policies import CANCELLATION_SIGNAL, WORKFLOW_NAME
+from corpuskit.workflows.policies import (
+    CANCELLATION_SIGNAL,
+    WORKFLOW_EXECUTION_TIMEOUT,
+    WORKFLOW_NAME,
+    WORKFLOW_RUN_TIMEOUT,
+)
 
 
 class RecordingHandle:
@@ -103,7 +111,7 @@ def test_workflow_reference_is_canonical_and_contains_no_spec_or_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_start_is_deterministic_and_deduplicated_by_run_and_request_ids() -> None:
+async def test_dispatch_start_matches_sdk_and_deduplicates_by_workflow_id() -> None:
     client = RecordingClient()
     dispatcher = TemporalDispatcher(
         client, task_queue="batch-cpu", terminal_probe=TerminalProbe(False)
@@ -115,9 +123,13 @@ async def test_dispatch_start_is_deterministic_and_deduplicated_by_run_and_reque
 
     assert len(client.starts) == 2
     name, reference, options = client.starts[0]
+    signature(Client.start_workflow).bind(None, name, reference, **options)
     assert name == WORKFLOW_NAME
     assert options["id"] == workflow_id(reference)
-    assert options["request_id"] == str(message.id)
+    assert options["id_reuse_policy"] == WorkflowIDReusePolicy.REJECT_DUPLICATE
+    assert options["id_conflict_policy"] == WorkflowIDConflictPolicy.USE_EXISTING
+    assert options["execution_timeout"] == WORKFLOW_EXECUTION_TIMEOUT
+    assert options["run_timeout"] == WORKFLOW_RUN_TIMEOUT
     assert options["task_queue"] == "batch-cpu"
     assert client.starts[1][2]["id"] == options["id"]
     assert set(asdict(reference)) == {"organization_id", "run_id", "spec_sha256"}

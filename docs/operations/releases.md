@@ -146,7 +146,7 @@ TLS or the short `ACCC4CF8` key ID alone is not treated as identity proof.
      uv sync --frozen --only-group build --no-install-project
    source "${build_environment}/bin/activate"
    python -c \
-     'import importlib.metadata as metadata; assert metadata.version("hatchling") == "1.32.0"'
+     'import importlib.metadata as metadata; assert metadata.version("hatchling") == "1.32.3"'
    uv build --no-sources --no-build-isolation --no-index --out-dir dist
    deactivate
    python scripts/release/release_contract.py versions --tag v0.1.0-alpha.1
