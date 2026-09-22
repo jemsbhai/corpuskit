@@ -186,7 +186,7 @@ jobs:
           uv sync --frozen --only-group build --no-install-project
           source "${UV_PROJECT_ENVIRONMENT}/bin/activate"
           python -c \
-            'import importlib.metadata as metadata; assert metadata.version("hatchling") == "1.32.0"'
+            'import importlib.metadata as metadata; assert metadata.version("hatchling") == "1.32.3"'
           uv build --no-sources --no-build-isolation --no-index --out-dir dist
           python scripts/release/release_contract.py distributions \
             --directory dist \

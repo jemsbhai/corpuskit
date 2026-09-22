@@ -55,9 +55,9 @@ release evidence and are listed in each report.
 
 ## Mutation contract
 
-Mutmut 3.7.0 runs in a digest-pinned Python/uv image as a fixed non-root user, with
+Mutmut 3.8.0 runs in a digest-pinned Python/uv image as a fixed non-root user, with
 networking disabled and a 45-minute outer timeout. Its focused test selection currently
-generates 155 real mutants across:
+generates 178 real mutants across:
 
 - `auth/dependencies.py` (critical authentication dependency),
 - `services/run_admission.py` (critical fail-closed run admission), and
@@ -68,10 +68,11 @@ unchecked, interrupted, suspicious, segfault, and timeout verdicts all count as 
 missing metadata fails closed. A minimum of 50 overall and 25 critical mutants prevents
 a token smoke. The committed gates are at least 75% overall and at least 90% critical.
 
-A fresh isolated Linux run of the hardened non-root image killed 127 of 155 overall
-(81.94%) and 72 of 79 critical mutants (91.14%), with no no-test, timeout, or unchecked
-verdicts. The checkout was read-only and mutation output used ephemeral storage. This
-is implementation evidence, not a clean-commit release record. The scheduled workflow
+A local Linux run of the hardened non-root Mutmut 3.8.0 image killed 153 of 178 overall
+(85.96%) and 98 of 102 critical mutants (96.08%), with 25 survivors and no no-test,
+timeout, or unchecked verdicts. Networking was disabled and mutation output stayed in
+an isolated writable checkout. This is implementation evidence, not a clean-commit
+release record. The scheduled workflow
 reruns from scratch and uploads its JSON. CorpusGen adapter and job-state mutation
 waves remain mandatory before GA as stated in `acceptance.md`; the current scoped
 score does not imply those future gates passed.
