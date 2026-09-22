@@ -259,7 +259,7 @@ def test_ci_verifies_the_exact_pgdg_primary_key_before_apt_trust() -> None:
 def test_ci_service_and_direct_run_images_are_digest_pinned() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert re.search(r"image: postgres:17\.9-bookworm@sha256:[0-9a-f]{64}$", workflow, re.MULTILINE)
-    assert len(re.findall(r"temporalio/temporal:1\.8\.3@sha256:[0-9a-f]{64}", workflow)) == 1
+    assert len(re.findall(r"temporalio/temporal:1\.9\.1@sha256:[0-9a-f]{64}", workflow)) == 1
     assert (
         len(
             re.findall(
