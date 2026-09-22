@@ -1,0 +1,110 @@
+--- a/accelerate/utils/modeling.py
++++ b/accelerate/utils/modeling.py
+@@ -1,4 +1,5 @@
+ # Copyright 2022 The HuggingFace Team. All rights reserved.
++# Modified by CorpusKit to repair checkpoint path traversal and special-file DoS (CVE-2026-69112).
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -20,6 +21,7 @@
+ import os
+ import re
+ import shutil
++import stat
+ import tempfile
+ import warnings
+ from collections import OrderedDict, defaultdict
+@@ -1814,6 +1816,65 @@
+     return state_dict
+ 
+ 
++def _corpuskit_checkpoint_file(checkpoint_folder, shard_name):
++    """Resolve an index-controlled path within the checkpoint or its immutable Hub blob cache."""
++    if (
++        not isinstance(shard_name, str)
++        or not shard_name
++        or "\x00" in shard_name
++        or shard_name.startswith(("/", "\\"))
++        or ":" in shard_name
++        or ".." in shard_name.replace("\\", "/").split("/")
++    ):
++        raise ValueError("Checkpoint contains an unsafe file reference.")
++    folder = os.path.realpath(checkpoint_folder or ".")
++    logical = os.path.abspath(os.path.join(folder, shard_name.replace("\\", os.sep)))
++    resolved = os.path.realpath(logical)
++    if os.path.commonpath((folder, logical)) != folder:
++        raise ValueError("Checkpoint file reference escapes its directory.")
++    allowed = os.path.commonpath((folder, resolved)) == folder
++    # Hub snapshots legitimately link to <repository>/blobs/<content-hash>.
++    # Permit that repository's real blob directory, never arbitrary external links.
++    ancestor = folder
++    while not allowed:
++        parent = os.path.dirname(ancestor)
++        if parent == ancestor:
++            break
++        if os.path.basename(parent) == "snapshots" and re.fullmatch(r"[a-fA-F0-9]{40}", os.path.basename(ancestor)):
++            repository = os.path.dirname(parent)
++            blobs = os.path.join(repository, "blobs")
++            allowed = os.path.realpath(blobs) == blobs and os.path.commonpath((blobs, resolved)) == blobs
++            break
++        ancestor = parent
++    if not allowed or not os.path.isfile(logical):
++        raise ValueError("Checkpoint files must be regular files within the approved model cache.")
++    # Retain the logical safetensors suffix when the physical Hub blob has no extension.
++    return logical
++
++
++def _corpuskit_checkpoint_index(index_filename):
++    """Validate the complete shard list before any weights are loaded."""
++    folder, name = os.path.split(os.fspath(index_filename))
++    index_filename = _corpuskit_checkpoint_file(folder, name)
++    descriptor = os.open(index_filename, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
++    with os.fdopen(descriptor, "rb") as stream:
++        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
++            raise ValueError("Checkpoint index must be a regular file.")
++        raw = stream.read(16 * 1024 * 1024 + 1)
++    if len(raw) > 16 * 1024 * 1024:
++        raise ValueError("Checkpoint index exceeds the supported size limit.")
++    try:
++        index = json.loads(raw)
++    except (ValueError, RecursionError):
++        raise ValueError("Checkpoint index must contain a valid JSON object.") from None
++    if not isinstance(index, dict):
++        raise ValueError("Checkpoint index must contain a JSON object.")
++    weight_map = index.get("weight_map", index)
++    if not isinstance(weight_map, dict) or not weight_map:
++        raise ValueError("Checkpoint index must contain a nonempty weight map.")
++    return sorted({_corpuskit_checkpoint_file(folder, name) for name in weight_map.values()})
++
++
+ def load_checkpoint_in_model(
+     model: nn.Module,
+     checkpoint: Union[str, os.PathLike],
+@@ -1911,9 +1972,9 @@
+         potential_state_bin = [f for f in os.listdir(checkpoint) if f == WEIGHTS_NAME]
+         potential_state_safetensor = [f for f in os.listdir(checkpoint) if f == SAFE_WEIGHTS_NAME]
+         if len(potential_state_bin) == 1:
+-            checkpoint_files = [os.path.join(checkpoint, potential_state_bin[0])]
++            checkpoint_files = [_corpuskit_checkpoint_file(checkpoint, potential_state_bin[0])]
+         elif len(potential_state_safetensor) == 1:
+-            checkpoint_files = [os.path.join(checkpoint, potential_state_safetensor[0])]
++            checkpoint_files = [_corpuskit_checkpoint_file(checkpoint, potential_state_safetensor[0])]
+         else:
+             # otherwise check for sharded checkpoints
+             potential_index = [f for f in os.listdir(checkpoint) if f.endswith(".index.json")]
+@@ -1934,14 +1995,7 @@
+         )
+ 
+     if index_filename is not None:
+-        checkpoint_folder = os.path.split(index_filename)[0]
+-        with open(index_filename) as f:
+-            index = json.loads(f.read())
+-
+-        if "weight_map" in index:
+-            index = index["weight_map"]
+-        checkpoint_files = sorted(list(set(index.values())))
+-        checkpoint_files = [os.path.join(checkpoint_folder, f) for f in checkpoint_files]
++        checkpoint_files = _corpuskit_checkpoint_index(index_filename)
+ 
+     # Logic for missing/unexpected keys goes here.
+ 
