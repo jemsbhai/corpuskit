@@ -21,6 +21,11 @@ env:
 jobs:
   exact-sha-ci:
     name: Require successful broad CI for this exact SHA
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.run_attempt == 1
+          && github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -33,12 +38,14 @@ jobs:
           SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           SOURCE_EVENT: ${{ github.event.workflow_run.event }}
           SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          QUALITY_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          # Execute a failing gate: skipped workflows must never qualify a release.
+          # Verify the eligible parent again before publishing source-SHA evidence.
           test "${SOURCE_CONCLUSION}" = success
           test "${SOURCE_EVENT}" = push
           test "${SOURCE_ATTEMPT}" = 1
+          test "${QUALITY_ATTEMPT}" = 1
           workflow_runs="$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
@@ -46,7 +53,8 @@ jobs:
           jq -e --arg sha "${SOURCE_SHA}" '
             [.workflow_runs[]
               | select(.head_sha == $sha)
-              | select(.event == "push" or .event == "workflow_dispatch")
+              | select(.event == "push")
+              | select(.run_attempt == 1)
               | select(.conclusion == "success")]
             | length > 0
           ' <<<"${workflow_runs}" >/dev/null
@@ -54,6 +62,7 @@ jobs:
   nightly-backend-linguistics:
     name: Push backend and linguistic release profile
     needs: exact-sha-ci
+    if: ${{ github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -134,6 +143,7 @@ jobs:
   nightly-frontend:
     name: Push frontend and three-browser release profile
     needs: exact-sha-ci
+    if: ${{ github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -196,6 +206,7 @@ jobs:
   performance:
     name: Deterministic performance and memory
     needs: exact-sha-ci
+    if: ${{ github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -282,6 +293,7 @@ jobs:
   mutation:
     name: Scoped mutation thresholds
     needs: exact-sha-ci
+    if: ${{ github.run_attempt == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:

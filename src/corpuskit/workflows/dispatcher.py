@@ -82,7 +82,6 @@ class TemporalDispatcher:
                     run_timeout=WORKFLOW_RUN_TIMEOUT,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
                     id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-                    request_id=str(message.id),
                     static_summary="CorpusKit durable corpus run",
                 )
             except WorkflowAlreadyStartedError:
