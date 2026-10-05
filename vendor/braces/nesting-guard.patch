@@ -1,0 +1,105 @@
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+-  "name": "braces",
++  "name": "@corpuskit/braces",
+   "description": "Bash-like brace expansion, implemented in JavaScript. Safer than other brace expansion libs, with complete support for the Bash 4.3 braces specification, without sacrificing speed.",
+-  "version": "3.0.3",
++  "version": "3.0.3-corpuskit.1",
+   "homepage": "https://github.com/micromatch/braces",
+   "author": "Jon Schlinkert (https://github.com/jonschlinkert)",
+   "contributors": [
+--- a/lib/compile.js
++++ b/lib/compile.js
+@@ -1,10 +1,12 @@
++// CorpusKit: reject excessive AST depth before recursive traversal.
+ 'use strict';
+ 
+ const fill = require('fill-range');
+ const utils = require('./utils');
+ 
+ const compile = (ast, options = {}) => {
+-  const walk = (node, parent = {}) => {
++  const walk = (node, parent = {}, depth = 0) => {
++    if (depth > 128) throw new SyntaxError("Brace nesting exceeds 128 levels");
+     const invalidBlock = utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     const invalid = invalidBlock === true || invalidNode === true;
+@@ -47,7 +49,7 @@
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += walk(child, node);
++        output += walk(child, node, depth + 1);
+       }
+     }
+ 
+--- a/lib/expand.js
++++ b/lib/expand.js
+@@ -1,3 +1,4 @@
++// CorpusKit: reject excessive AST depth before recursive traversal.
+ 'use strict';
+ 
+ const fill = require('fill-range');
+@@ -33,7 +34,8 @@
+ const expand = (ast, options = {}) => {
+   const rangeLimit = options.rangeLimit === undefined ? 1000 : options.rangeLimit;
+ 
+-  const walk = (node, parent = {}) => {
++  const walk = (node, parent = {}, depth = 0) => {
++    if (depth > 128) throw new SyntaxError("Brace nesting exceeds 128 levels");
+     node.queue = [];
+ 
+     let p = parent;
+@@ -100,7 +102,7 @@
+       }
+ 
+       if (child.nodes) {
+-        walk(child, node);
++        walk(child, node, depth + 1);
+       }
+     }
+ 
+--- a/lib/parse.js
++++ b/lib/parse.js
+@@ -144,6 +144,7 @@
+ 
+     if (value === CHAR_LEFT_PARENTHESES) {
+       block = push({ type: 'paren', nodes: [] });
++      if (stack.length >= 128) throw new SyntaxError("Brace nesting exceeds 128 levels");
+       stack.push(block);
+       push({ type: 'text', value });
+       continue;
+@@ -210,6 +211,7 @@
+       };
+ 
+       block = push(brace);
++      if (stack.length >= 128) throw new SyntaxError("Brace nesting exceeds 128 levels");
+       stack.push(block);
+       push({ type: 'open', value });
+       continue;
+--- a/lib/stringify.js
++++ b/lib/stringify.js
+@@ -1,9 +1,11 @@
++// CorpusKit: reject excessive AST depth before recursive traversal.
+ 'use strict';
+ 
+ const utils = require('./utils');
+ 
+ module.exports = (ast, options = {}) => {
+-  const stringify = (node, parent = {}) => {
++  const stringify = (node, parent = {}, depth = 0) => {
++    if (depth > 128) throw new SyntaxError("Brace nesting exceeds 128 levels");
+     const invalidBlock = options.escapeInvalid && utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     let output = '';
+@@ -21,7 +23,7 @@
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += stringify(child);
++        output += stringify(child, node, depth + 1);
+       }
+     }
+     return output;
