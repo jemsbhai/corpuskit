@@ -3,21 +3,43 @@
 ARG GO_IMAGE_DIGEST=sha256:b8bae5bd9ba9b1f89b635c91c24cc75cea335a16fb5076310f38566fc674b1ec
 ARG BUSYBOX_IMAGE_DIGEST=sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
 FROM golang:1.24.7-bookworm@${GO_IMAGE_DIGEST} AS build-base
-ENV CGO_ENABLED=0
+# The module proxy has returned HTTP/2 INTERNAL_ERROR responses in hosted CI.
+# Use HTTP/1 for build downloads; the independent runtime stage keeps its defaults.
+ENV CGO_ENABLED=0 GODEBUG=http2client=0
 
 FROM build-base AS server-build
-RUN git init /src && cd /src && git remote add origin https://github.com/minio/minio.git \
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    git init /src && cd /src && git remote add origin https://github.com/minio/minio.git \
     && git fetch --depth 1 origin 07c3a429bfed433e49018cb0f78a52145d4bedeb \
     && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "07c3a429bfed433e49018cb0f78a52145d4bedeb" \
-    && go build -mod=readonly -trimpath -o /go/bin/minio .
+    && attempt=0 \
+    && until timeout --signal=TERM --kill-after=10s 5m go mod download; do \
+        attempt=$((attempt + 1)); \
+        if [ "${attempt}" -ge 3 ]; then exit 1; fi; \
+        sleep "$((attempt * 5))"; \
+    done \
+    && git diff --exit-code -- go.mod go.sum \
+    && GOPROXY=off go mod verify \
+    && GOPROXY=off go build -mod=readonly -trimpath -o /go/bin/minio . \
+    && git diff --exit-code -- go.mod go.sum
 
 FROM build-base AS client-build
-RUN git init /src && cd /src && git remote add origin https://github.com/minio/mc.git \
+RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
+    git init /src && cd /src && git remote add origin https://github.com/minio/mc.git \
     && git fetch --depth 1 origin 7394ce0dd2a80935aded936b09fa12cbb3cb8096 \
     && git checkout --detach FETCH_HEAD \
     && test "$(git rev-parse HEAD)" = "7394ce0dd2a80935aded936b09fa12cbb3cb8096" \
-    && go build -mod=readonly -trimpath -o /go/bin/mc .
+    && attempt=0 \
+    && until timeout --signal=TERM --kill-after=10s 5m go mod download; do \
+        attempt=$((attempt + 1)); \
+        if [ "${attempt}" -ge 3 ]; then exit 1; fi; \
+        sleep "$((attempt * 5))"; \
+    done \
+    && git diff --exit-code -- go.mod go.sum \
+    && GOPROXY=off go mod verify \
+    && GOPROXY=off go build -mod=readonly -trimpath -o /go/bin/mc . \
+    && git diff --exit-code -- go.mod go.sum
 
 FROM busybox:1.37.0@${BUSYBOX_IMAGE_DIGEST} AS runtime
 COPY --from=build-base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt

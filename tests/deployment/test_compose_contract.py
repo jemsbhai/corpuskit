@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -118,3 +120,101 @@ def test_minio_services_build_pinned_source_instead_of_removed_registry_images()
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "docker compose build minio minio-init" in workflow
     assert "quay.io/minio" not in (ROOT / "compose.yaml").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("target", ["server-build", "client-build"])
+@pytest.mark.parametrize(
+    ("scenario", "expected", "returncode"),
+    [
+        ("success", ["download", "diff", "verify", "build", "diff"], 0),
+        (
+            "transient",
+            [
+                "download",
+                "sleep:5",
+                "download",
+                "sleep:10",
+                "download",
+                "diff",
+                "verify",
+                "build",
+                "diff",
+            ],
+            0,
+        ),
+        ("persistent", ["download", "sleep:5", "download", "sleep:10", "download"], 1),
+        ("changed-download", ["download", "diff"], 26),
+        ("bad-cache", ["download", "diff", "verify"], 24),
+        ("bad-build", ["download", "diff", "verify", "build"], 25),
+        ("changed-build", ["download", "diff", "verify", "build", "diff"], 26),
+    ],
+)
+def test_minio_download_retry_preserves_build_and_checksum_failures(
+    target: str, scenario: str, expected: list[str], returncode: int
+) -> None:
+    """Execute the production retry chain with controlled transport/build failures."""
+    shell = shutil.which("sh")
+    assert shell is not None, "A POSIX shell is required for deployment contract tests"
+    dockerfile = (ROOT / "docker/minio.Dockerfile").read_text(encoding="utf-8")
+    stage = dockerfile.split(f"FROM build-base AS {target}\n", maxsplit=1)[1].split(
+        "\nFROM ", maxsplit=1
+    )[0]
+    chain = "attempt=0" + stage.split("&& attempt=0", maxsplit=1)[1]
+    chain = chain.replace("\\\n", "")
+    assert (
+        "ENV CGO_ENABLED=0 GODEBUG=http2client=0"
+        in dockerfile.split("FROM build-base AS server-build", maxsplit=1)[0]
+    )
+    assert "GODEBUG" not in dockerfile.split("AS runtime\n", maxsplit=1)[1]
+
+    mocks = """
+downloads=0
+diffs=0
+timeout() {
+    [ "$1 $2 $3" = "--signal=TERM --kill-after=10s 5m" ] || exit 90
+    shift 3
+    "$@"
+}
+sleep() { printf 'sleep:%s\n' "$1"; }
+git() {
+    [ "$*" = "diff --exit-code -- go.mod go.sum" ] || exit 91
+    diffs=$((diffs + 1))
+    echo diff
+    case "$SCENARIO:$diffs" in
+        changed-download:1|changed-build:2) return 26 ;;
+    esac
+    return 0
+}
+go() {
+    [ "$GODEBUG" = "http2client=0" ] || exit 92
+    case "$1 $2" in
+        'mod download')
+            downloads=$((downloads + 1))
+            echo download
+            if [ "$SCENARIO" = persistent ] ||
+                { [ "$SCENARIO" = transient ] && [ "$downloads" -lt 3 ]; }; then
+                return 23
+            fi ;;
+        'mod verify')
+            [ "$GOPROXY" = off ] || exit 93
+            echo verify
+            [ "$SCENARIO" != bad-cache ] || return 24 ;;
+        'build -mod=readonly')
+            [ "$GOPROXY" = off ] || exit 94
+            echo build
+            [ "$SCENARIO" != bad-build ] || return 25 ;;
+        *) exit 95 ;;
+    esac
+    return 0
+}
+"""
+    result = subprocess.run(  # noqa: S603 - fixed executable and repository-owned shell fragment
+        [shell, "-c", mocks + chain],
+        env={**os.environ, "SCENARIO": scenario, "GODEBUG": "http2client=0"},
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.stdout.splitlines() == expected, result.stderr
+    assert result.returncode == returncode, result.stderr
