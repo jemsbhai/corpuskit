@@ -243,7 +243,7 @@ image digest, scans the exact digests, emits SPDX and CycloneDX SBOMs, keylessly
 files/images, creates build and SBOM attestations, and verifies all evidence before publishing.
 
 Standard CI uploads backend JUnit/coverage and frontend coverage/browser artifacts for 14 days.
-`.github/workflows/quality-scheduled.yml` runs daily or by manual dispatch and uploads repeated
+`.github/workflows/quality-scheduled.yml` runs after successful CI on new main-branch pushes and uploads repeated
 backend/linguistic, frontend/three-browser, performance, and mutation evidence for 14 days. It
 fails unless broad `ci.yml` already succeeded for the same SHA, and the release gate accepts only
 a successful scheduled run for the exact tagged commit. This is the broad automated nightly

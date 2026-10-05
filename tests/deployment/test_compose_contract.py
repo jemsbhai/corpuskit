@@ -100,3 +100,21 @@ def test_minio_initialization_retries_transient_startup_failures() -> None:
     assert 'if [ "$${attempt}" -ge 20 ]' in script
     assert "mc mb --ignore-existing" in script
     assert "mc anonymous set none" in script
+
+
+def test_minio_services_build_pinned_source_instead_of_removed_registry_images() -> None:
+    services = _compose_config()["services"]
+    for service, target in [("minio", "minio-server"), ("minio-init", "minio-client")]:
+        assert services[service]["build"]["dockerfile"] == "docker/minio.Dockerfile"
+        assert services[service]["build"]["target"] == target
+    assert services["minio"]["healthcheck"]["test"] == [
+        "CMD",
+        "wget",
+        "-q",
+        "-O",
+        "/dev/null",
+        "http://127.0.0.1:9000/minio/health/live",
+    ]
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "docker compose build minio minio-init" in workflow
+    assert "quay.io/minio" not in (ROOT / "compose.yaml").read_text(encoding="utf-8")

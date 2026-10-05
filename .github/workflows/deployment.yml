@@ -16,6 +16,7 @@ on:
       - pyproject.toml
       - uv.lock
   pull_request:
+    types: [opened, synchronize]
     branches: [main]
     paths:
       - .github/workflows/deployment.yml
@@ -29,7 +30,6 @@ on:
       - tests/deployment/**
       - pyproject.toml
       - uv.lock
-  workflow_dispatch:
 
 permissions:
   contents: read

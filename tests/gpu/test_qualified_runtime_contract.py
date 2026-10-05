@@ -63,6 +63,8 @@ def test_windows_cuda_profile_is_exact_and_substantive() -> None:
     assert packages["corpusgen"] == "0.1.7"
     assert packages["transformers"] == "5.15.0"
     assert packages["safetensors"] == "0.8.0"
+    assert packages["pyjwt"] == "2.15.1"
+    assert packages["urllib3"] == "2.8.0"
     wheel_sha256 = "0bcf7ae00b2e20ef2b53af2e764a4fd8646b913bfaaeba2b9c975e672e8c7902"
     assert f"# torch-wheel-sha256={wheel_sha256}" in lock_text
     assert (

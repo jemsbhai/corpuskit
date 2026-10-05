@@ -1,9 +1,10 @@
-name: Scheduled quality evidence
+name: Push quality evidence
 
 on:
-  schedule:
-    - cron: "27 4 * * *"
-  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
 
 permissions:
   actions: read # Verify that the candidate SHA completed the mandatory CI workflow.
@@ -28,9 +29,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           set -euo pipefail
+          # Execute a failing gate: skipped workflows must never qualify a release.
+          test "${SOURCE_CONCLUSION}" = success
+          test "${SOURCE_EVENT}" = push
+          test "${SOURCE_ATTEMPT}" = 1
           workflow_runs="$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
@@ -44,7 +52,7 @@ jobs:
           ' <<<"${workflow_runs}" >/dev/null
 
   nightly-backend-linguistics:
-    name: Daily backend and linguistic release profile
+    name: Push backend and linguistic release profile
     needs: exact-sha-ci
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -52,6 +60,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -117,13 +126,13 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nightly-backend-${{ github.sha }}
+          name: nightly-backend-${{ github.event.workflow_run.head_sha }}
           path: artifacts/nightly-backend
           if-no-files-found: error
           retention-days: 14
 
   nightly-frontend:
-    name: Daily frontend and three-browser release profile
+    name: Push frontend and three-browser release profile
     needs: exact-sha-ci
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -131,6 +140,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Set up Node.js
@@ -175,7 +185,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: nightly-frontend-${{ github.sha }}
+          name: nightly-frontend-${{ github.event.workflow_run.head_sha }}
           path: |
             apps/web/coverage
             apps/web/playwright-report
@@ -193,6 +203,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -263,7 +274,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: performance-evidence-${{ github.sha }}
+          name: performance-evidence-${{ github.event.workflow_run.head_sha }}
           path: artifacts/performance
           if-no-files-found: error
           retention-days: 14
@@ -277,6 +288,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Scan source secrets and infrastructure configuration
@@ -346,7 +358,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutation-evidence-${{ github.sha }}
+          name: mutation-evidence-${{ github.event.workflow_run.head_sha }}
           path: artifacts/mutation
           if-no-files-found: error
           retention-days: 14

@@ -1,0 +1,5 @@
+{
+  "upstream": "https://registry.npmjs.org/braces/-/braces-3.0.3.tgz",
+  "upstream_sha256": "1cd18e862c8640b4568b1425a7df4ee030ff201d45b2da8f9f222d2987494ffc",
+  "patched_sha256": "4e3b239ba8897e232d448a0e61e8c7a4f80f6cfd293759e6aaabad254bd68f04"
+}

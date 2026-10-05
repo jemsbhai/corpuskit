@@ -63,7 +63,7 @@ pydantic==2.13.4
 pydantic-core==2.46.4
 pydantic-settings==2.15.0
 pygments==2.20.0
-pyjwt==2.13.0
+pyjwt==2.15.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-multipart==0.0.32
@@ -88,7 +88,7 @@ typer==0.27.1
 types-protobuf==7.34.1.20260518
 typing-extensions==4.15.0
 typing-inspection==0.4.3
-urllib3==2.7.0
+urllib3==2.8.0
 uvicorn==0.52.1
 watchfiles==1.2.0
 websockets==17.0.1

@@ -443,7 +443,9 @@ for (const [route, heading] of routes) {
       failures.push(`request: ${request.method()} ${request.url()}`),
     );
     await mockApi(page);
-    await page.goto(route);
+    // Wait for the document and assert hydrated app readiness below. Firefox can
+    // withhold the window load event after the page and API responses are ready.
+    await page.goto(route, { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("heading", { name: heading, level: 1 }),
     ).toBeVisible();

@@ -165,7 +165,10 @@ def test_release_build_backend_is_exactly_pinned_and_locked() -> None:
     build_requirements = project["build-system"]["requires"]
     build_group = project["dependency-groups"]["build"]
 
-    assert build_requirements == ["hatchling==1.32.0"]
+    assert len(build_requirements) == 1
+    match = re.fullmatch(r"hatchling==([0-9]+\.[0-9]+\.[0-9]+)", build_requirements[0])
+    assert match is not None
+    version = match.group(1)
     assert build_group == build_requirements
 
     locked = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
@@ -174,11 +177,11 @@ def test_release_build_backend_is_exactly_pinned_and_locked() -> None:
     )
     assert application["dev-dependencies"]["build"] == [{"name": "hatchling"}]
     assert application["metadata"]["requires-dev"]["build"] == [
-        {"name": "hatchling", "specifier": "==1.32.0"}
+        {"name": "hatchling", "specifier": f"=={version}"}
     ]
 
     hatchling = [package for package in locked["package"] if package["name"] == "hatchling"]
-    assert [package["version"] for package in hatchling] == ["1.32.0"]
+    assert [package["version"] for package in hatchling] == [version]
     assert hatchling[0]["sdist"]["hash"].startswith("sha256:")
     assert hatchling[0]["wheels"]
     assert all(wheel["hash"].startswith("sha256:") for wheel in hatchling[0]["wheels"])
@@ -191,7 +194,8 @@ def test_release_build_uses_only_the_frozen_nonisolated_build_group() -> None:
     assert "uv lock --check" in workflow
     assert "uv sync --frozen --only-group build --no-install-project" in workflow
     assert 'source "${UV_PROJECT_ENVIRONMENT}/bin/activate"' in workflow
-    assert 'metadata.version("hatchling") == "1.32.0"' in workflow
+    assert 'metadata.version("hatchling") == expected' in workflow
+    assert '["build-system"]["requires"][0].removeprefix("hatchling==")' in workflow
     assert "uv build --no-sources --no-build-isolation --no-index --out-dir dist" in workflow
     assert "uv build --no-sources --out-dir dist" not in workflow
 
@@ -260,15 +264,11 @@ def test_ci_service_and_direct_run_images_are_digest_pinned() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert re.search(r"image: postgres:17\.9-bookworm@sha256:[0-9a-f]{64}$", workflow, re.MULTILINE)
     assert len(re.findall(r"temporalio/temporal:1\.8\.2@sha256:[0-9a-f]{64}", workflow)) == 1
-    assert (
-        len(
-            re.findall(
-                r"quay\.io/minio/minio:RELEASE\.2025-09-07T16-13-09Z@sha256:[0-9a-f]{64}",
-                workflow,
-            )
-        )
-        == 1
-    )
+    assert "docker build --file docker/minio.Dockerfile --target minio-server" in workflow
+    assert "corpuskit-minio:ci" in workflow
+    minio = (REPOSITORY_ROOT / "docker/minio.Dockerfile").read_text(encoding="utf-8")
+    assert "git fetch --depth 1 origin 07c3a429bfed433e49018cb0f78a52145d4bedeb" in minio
+    assert "USER 10001:10001" in minio
 
 
 def test_ci_combined_replay_gate_attests_worker_and_role_separation() -> None:
@@ -598,6 +598,8 @@ def test_every_docker_from_has_a_declared_sha256_digest() -> None:
         from_lines = re.findall(r"^FROM (.+)$", text, re.MULTILINE)
         assert from_lines, dockerfile
         for line in from_lines:
+            if line == "scratch":
+                continue  # Empty base has no registry artifact to pin.
             match = re.search(r"@\$\{([A-Z_]+_IMAGE_DIGEST)\}", line)
             if match is None and re.fullmatch(r"[a-z][a-z0-9-]* AS [a-z][a-z0-9-]*", line):
                 continue
@@ -613,7 +615,7 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
             "sha256:c2cc26d8f991c2db236ad51a61efee843c482372d6d22570787309d511694110"
         ),
         "NPM_VERSION": "11.16.0",
-        "OPENSSL_PACKAGE_VERSION": "3.5.8-r0",
+        "OPENSSL_MIN_VERSION": "3.5.9-r0",
     }.items():
         assert f"ARG {argument}={value}" in text
 
@@ -628,8 +630,8 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
     assert 'npm install --global "npm@${NPM_VERSION}" --ignore-scripts' in dependencies
     assert 'test "$(npm --version)" = "${NPM_VERSION}"' in dependencies
     assert text.count("apk add --no-cache --upgrade") == 2
-    assert text.count('"libcrypto3=${OPENSSL_PACKAGE_VERSION}"') == 2
-    assert text.count('"libssl3=${OPENSSL_PACKAGE_VERSION}"') == 2
+    assert text.count('"libcrypto3>=${OPENSSL_MIN_VERSION}"') == 2
+    assert text.count('"libssl3>=${OPENSSL_MIN_VERSION}"') == 2
     assert "npm install" not in runtime
     assert "rm -rf /usr/local/lib/node_modules/npm" in runtime
     assert "rm -f /usr/local/bin/npm /usr/local/bin/npx" in runtime
@@ -847,3 +849,23 @@ def test_checksum_manifest_rejects_unchecked_or_tampered_assets(tmp_path: Path) 
     result = run_contract(*verify_arguments)
     assert result.returncode == 2
     assert "checksum" in result.stderr
+
+
+def test_web_image_copies_local_npm_archives_before_install() -> None:
+    text = (REPOSITORY_ROOT / "docker/web.Dockerfile").read_text(encoding="utf-8")
+    package = json.loads((REPOSITORY_ROOT / "package.json").read_text(encoding="utf-8"))
+    for dependency in package["devDependencies"].values():
+        if dependency.startswith("file:"):
+            archive = dependency.removeprefix("file:")
+            assert (REPOSITORY_ROOT / archive).is_file()
+            assert text.index(f"COPY {archive} ./{archive}") < text.index("    npm ci")
+
+
+def test_published_dependencies_enforce_the_urllib3_security_floor() -> None:
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    lock = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
+    assert "urllib3>=2.8.0,<3" in project["project"]["dependencies"]
+    application = next(package for package in lock["package"] if package["name"] == "corpuskit-app")
+    assert {"name": "urllib3", "specifier": ">=2.8.0,<3"} in application["metadata"][
+        "requires-dist"
+    ]

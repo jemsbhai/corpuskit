@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -443,6 +443,9 @@ jobs:
           --tag corpuskit-worker-batch:combined-ci
           .
 
+      - name: Build MinIO from immutable upstream source
+        run: docker build --file docker/minio.Dockerfile --target minio-server --tag corpuskit-minio:ci .
+
       - name: Start pinned local Temporal and private MinIO servers
         run: |
           docker run --detach --rm --name corpuskit-temporal-ci \
@@ -453,10 +456,10 @@ jobs:
             --publish 127.0.0.1:9000:9000 \
             --env MINIO_ROOT_USER=corpuskit-combined \
             --env MINIO_ROOT_PASSWORD=combined-minio-only \
-            --tmpfs /data:rw,noexec,nodev,nosuid,size=256m \
+            --tmpfs /data:rw,noexec,nodev,nosuid,size=256m,mode=1777 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            corpuskit-minio:ci \
             server /data --address :9000
           for _attempt in $(seq 1 30); do
             if docker exec corpuskit-temporal-ci temporal operator cluster health \
@@ -868,11 +871,14 @@ jobs:
       - name: Enforce changed workbench coverage
         run: npm run test:workbenches -- --coverage.reportsDirectory=coverage/workbenches
 
-      - name: Install Chromium for browser acceptance
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium and Firefox for browser acceptance
+        run: npx playwright install --with-deps chromium firefox
 
       - name: Browser and accessibility acceptance
         run: npm run test:e2e -- --project=chromium
+
+      - name: Firefox workbench navigation and accessibility regression
+        run: npm run test:e2e -- --project=firefox e2e/workbenches.spec.ts
 
       - name: Preserve frontend coverage and browser evidence
         if: ${{ always() }}
@@ -885,6 +891,9 @@ jobs:
             apps/web/test-results
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Verify patched brace parser boundaries
+        run: node --test scripts/security/braces-patch.test.cjs
 
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
@@ -1013,6 +1022,11 @@ jobs:
             --entrypoint python \
             corpuskit-worker-external-provider:ci \
             -c "import importlib.util; import corpusgen, datasets, litellm; import corpuskit.worker.composition; assert importlib.util.find_spec('torch') is None"
+
+      - name: Build pinned Compose object-storage services
+        env:
+          COMPOSE_PROJECT_NAME: corpuskit-ci
+        run: docker compose build minio minio-init
 
       - name: Smoke-test clean Compose migration and API startup
         env:
