@@ -20,7 +20,7 @@ RUN apk add --no-cache --upgrade \
 
 COPY package.json package-lock.json .npmrc ./
 COPY apps/web/package.json ./apps/web/package.json
-COPY vendor/braces/corpuskit-braces-3.0.3-corpuskit.1.tgz ./vendor/braces/corpuskit-braces-3.0.3-corpuskit.1.tgz
+COPY vendor/braces/corpuskit-braces-3.0.3+corpuskit.1.tgz ./vendor/braces/corpuskit-braces-3.0.3+corpuskit.1.tgz
 RUN --mount=type=cache,target=/root/.npm \
     npm ci \
     && test "$(npm approve-scripts --allow-scripts-pending)" = \

@@ -47,28 +47,31 @@ def test_root_quality_scripts_forward_to_the_web_workspace() -> None:
     ("runs", "expected"),
     [
         pytest.param([], False, id="no-ci-evidence"),
-        pytest.param([("push", "success", "a")], True, id="exact-sha-push"),
-        pytest.param([("workflow_dispatch", "success", "a")], True, id="exact-sha-dispatch"),
-        pytest.param([("pull_request", "success", "a")], False, id="pr-tests-merge-not-head"),
-        pytest.param([("pull_request_target", "success", "a")], False, id="pr-target-tests-base"),
-        pytest.param([("workflow_run", "success", "a")], False, id="untrusted-event"),
-        pytest.param([("push", "failure", "a")], False, id="failed-ci"),
-        pytest.param([("workflow_dispatch", None, "a")], False, id="unfinished-ci"),
-        pytest.param([("push", "success", "b")], False, id="other-commit"),
+        pytest.param([("push", "success", "a", 1)], True, id="exact-sha-push"),
+        pytest.param([("push", "success", "a", 2)], False, id="unchanged-push-rerun"),
+        pytest.param([("workflow_dispatch", "success", "a", 1)], False, id="manual-ci"),
+        pytest.param([("pull_request", "success", "a", 1)], False, id="pr-tests-merge-not-head"),
         pytest.param(
-            [("pull_request", "success", "a"), ("push", "failure", "a")],
+            [("pull_request_target", "success", "a", 1)], False, id="pr-target-tests-base"
+        ),
+        pytest.param([("workflow_run", "success", "a", 1)], False, id="untrusted-event"),
+        pytest.param([("push", "failure", "a", 1)], False, id="failed-ci"),
+        pytest.param([("workflow_dispatch", None, "a", 1)], False, id="unfinished-ci"),
+        pytest.param([("push", "success", "b", 1)], False, id="other-commit"),
+        pytest.param(
+            [("pull_request", "success", "a", 1), ("push", "failure", "a", 1)],
             False,
             id="pr-success-cannot-rescue-failed-push",
         ),
         pytest.param(
-            [("push", "failure", "a"), ("workflow_dispatch", "success", "a")],
-            True,
-            id="successful-dispatch-after-failed-push",
+            [("push", "failure", "a", 1), ("workflow_dispatch", "success", "a", 1)],
+            False,
+            id="manual-ci-cannot-rescue-failed-push",
         ),
     ],
 )
 def test_scheduled_gate_requires_successful_ci_for_the_actual_checkout(
-    runs: list[tuple[str, str | None, str]], expected: bool
+    runs: list[tuple[str, str | None, str, int]], expected: bool
 ) -> None:
     jq = shutil.which("jq")
     if jq is None:
@@ -82,8 +85,13 @@ def test_scheduled_gate_requires_successful_ci_for_the_actual_checkout(
     assert expression is not None, "The scheduled gate must expose its jq evidence filter"
     response = {
         "workflow_runs": [
-            {"event": event, "conclusion": conclusion, "head_sha": character * 40}
-            for event, conclusion, character in runs
+            {
+                "event": event,
+                "conclusion": conclusion,
+                "head_sha": character * 40,
+                "run_attempt": attempt,
+            }
+            for event, conclusion, character, attempt in runs
         ]
     }
     result = subprocess.run(  # noqa: S603 - fixed executable; repository-owned filter, no shell.
@@ -328,12 +336,21 @@ def test_ci_runs_only_for_updates_and_quality_uses_the_completed_push_sha() -> N
         "workflow_run": {"workflows": ["CI"], "branches": ["main"], "types": ["completed"]}
     }
     gate = quality["jobs"]["exact-sha-ci"]
-    assert "if" not in gate
+    assert " ".join(gate["if"].split()) == (
+        "${{ github.event.workflow_run.conclusion == 'success' "
+        "&& github.event.workflow_run.event == 'push' "
+        "&& github.event.workflow_run.run_attempt == 1 "
+        "&& github.run_attempt == 1 }}"
+    )
     script = gate["steps"][0]["run"]
     assert 'test "${SOURCE_CONCLUSION}" = success' in script
     assert 'test "${SOURCE_EVENT}" = push' in script
     assert 'test "${SOURCE_ATTEMPT}" = 1' in script
-    for job in quality["jobs"].values():
+    assert 'test "${QUALITY_ATTEMPT}" = 1' in script
+    for job_id, job in quality["jobs"].items():
+        if job_id != "exact-sha-ci":
+            assert job["needs"] == "exact-sha-ci"
+            assert job["if"] == "${{ github.run_attempt == 1 }}"
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/checkout@"):
                 assert step["with"]["ref"] == "${{ github.event.workflow_run.head_sha }}"

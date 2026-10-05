@@ -127,17 +127,67 @@ jobs:
             and .verification.reason == "valid"
           ' <<<"${tag_object}" >/dev/null
 
-          for required_workflow in "ci.yml" "quality-scheduled.yml"; do
-            workflow_runs="$(gh api \
+          workflow_runs="$(gh api \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
+          jq -e --arg sha "${SOURCE_SHA}" '
+            [.workflow_runs[]
+              | select(.head_sha == $sha)
+              | select(.event == "push")
+              | select(.run_attempt == 1)
+              | select(.conclusion == "success")]
+            | length > 0
+          ' <<<"${workflow_runs}" >/dev/null
+
+          # workflow_run reports the current default-branch SHA, which can differ
+          # from the parent CI's tested SHA. Qualify its completed jobs and retained
+          # source-SHA artifacts instead of trusting that reported workflow SHA.
+          quality_runs="$(gh api --paginate --slurp \
+            -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+            "repos/${REPOSITORY}/actions/workflows/quality-scheduled.yml/runs?event=workflow_run&status=success&per_page=100")"
+          quality_candidates="$(jq -r '
+            .[].workflow_runs[]
+            | select(.event == "workflow_run" and .conclusion == "success")
+            | select(.run_attempt == 1)
+            | .id
+          ' <<<"${quality_runs}")"
+          quality_qualified=false
+          while IFS= read -r quality_run_id; do
+            test -n "${quality_run_id}" || continue
+            quality_jobs="$(gh api --paginate --slurp \
               -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
-              "repos/${REPOSITORY}/actions/workflows/${required_workflow}/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"
-            jq -e --arg sha "${SOURCE_SHA}" '
-              [.workflow_runs[]
-                | select(.head_sha == $sha)
-                | select(.conclusion == "success")]
-              | length > 0
-            ' <<<"${workflow_runs}" >/dev/null
-          done
+              "repos/${REPOSITORY}/actions/runs/${quality_run_id}/jobs?filter=latest&per_page=100")"
+            if jq -e '
+              [.[].jobs[]] as $jobs
+              | ["Require successful broad CI for this exact SHA",
+                 "Push backend and linguistic release profile",
+                 "Push frontend and three-browser release profile",
+                 "Deterministic performance and memory",
+                 "Scoped mutation thresholds"] as $required
+              | all($required[];
+                  . as $name
+                  | [$jobs[] | select(.name == $name)] as $matches
+                  | ($matches | length) == 1
+                    and $matches[0].status == "completed"
+                    and $matches[0].conclusion == "success")
+            ' <<<"${quality_jobs}" >/dev/null; then
+              quality_artifacts="$(gh api --paginate --slurp \
+                -H "X-GitHub-Api-Version: ${GH_API_VERSION}" \
+                "repos/${REPOSITORY}/actions/runs/${quality_run_id}/artifacts?per_page=100")"
+              if jq -e --arg sha "${SOURCE_SHA}" '
+                [.[].artifacts[] | select(.expired == false)] as $artifacts
+                | ["nightly-backend-", "nightly-frontend-",
+                   "performance-evidence-", "mutation-evidence-"] as $prefixes
+                | all($prefixes[];
+                    . as $prefix
+                    | any($artifacts[]; .name == ($prefix + $sha)))
+              ' <<<"${quality_artifacts}" >/dev/null; then
+                quality_qualified=true
+                break
+              fi
+            fi
+          done <<<"${quality_candidates}"
+          test "${quality_qualified}" = true
 
           if gh release view "${TAG}" --repo "${REPOSITORY}" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists; immutable versions are never rebuilt." >&2
