@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from inspect import signature
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from temporalio.client import Client
+from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 
 from corpuskit.config import Settings
 from corpuskit.domain.jobs import RunKind
@@ -103,7 +106,7 @@ def test_workflow_reference_is_canonical_and_contains_no_spec_or_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_start_is_deterministic_and_deduplicated_by_run_and_request_ids() -> None:
+async def test_dispatch_start_uses_sdk_api_and_deduplicates_by_workflow_identity() -> None:
     client = RecordingClient()
     dispatcher = TemporalDispatcher(
         client, task_queue="batch-cpu", terminal_probe=TerminalProbe(False)
@@ -117,10 +120,14 @@ async def test_dispatch_start_is_deterministic_and_deduplicated_by_run_and_reque
     name, reference, options = client.starts[0]
     assert name == WORKFLOW_NAME
     assert options["id"] == workflow_id(reference)
-    assert options["request_id"] == str(message.id)
+    assert options["id_reuse_policy"] is WorkflowIDReusePolicy.REJECT_DUPLICATE
+    assert options["id_conflict_policy"] is WorkflowIDConflictPolicy.USE_EXISTING
+    assert "request_id" not in options
     assert options["task_queue"] == "batch-cpu"
     assert client.starts[1][2]["id"] == options["id"]
     assert set(asdict(reference)) == {"organization_id", "run_id", "spec_sha256"}
+    for workflow_name, argument, start_options in client.starts:
+        signature(Client.start_workflow).bind(client, workflow_name, argument, **start_options)
 
 
 @pytest.mark.asyncio
