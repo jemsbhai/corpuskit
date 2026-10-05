@@ -194,7 +194,8 @@ def test_release_build_uses_only_the_frozen_nonisolated_build_group() -> None:
     assert "uv lock --check" in workflow
     assert "uv sync --frozen --only-group build --no-install-project" in workflow
     assert 'source "${UV_PROJECT_ENVIRONMENT}/bin/activate"' in workflow
-    assert 'metadata.version("hatchling") == "1.32.0"' in workflow
+    assert 'metadata.version("hatchling") == expected' in workflow
+    assert '["build-system"]["requires"][0].removeprefix("hatchling==")' in workflow
     assert "uv build --no-sources --no-build-isolation --no-index --out-dir dist" in workflow
     assert "uv build --no-sources --out-dir dist" not in workflow
 
