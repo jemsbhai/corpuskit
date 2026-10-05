@@ -30,6 +30,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0.43,<3",
   "structlog>=25.4,<26",
   "temporalio>=1.16,<2",
+  "urllib3>=2.8.0,<3",
   "uvicorn[standard]>=0.35,<1",
 ]
 
@@ -42,9 +43,6 @@ worker-batch = ["corpusgen[local,optimization]==0.1.7", "accelerate==1.15.0"]
 worker-external-provider = ["corpusgen[llm,repository]==0.1.7"]
 worker-gpu-inference = ["corpusgen[local]==0.1.7", "accelerate==1.15.0"]
 worker-gpu-training = ["corpusgen[local]==0.1.7", "accelerate==1.15.0"]
-
-[tool.uv]
-constraint-dependencies = ["urllib3>=2.8.0"]
 
 [tool.uv.sources]
 # Reproducible downstream checkpoint-loader fix; provenance and audit verification

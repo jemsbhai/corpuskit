@@ -7,9 +7,6 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-constraints = [{ name = "urllib3", specifier = ">=2.8.0" }]
-
 [[package]]
 name = "about-time"
 version = "4.2.1"
@@ -544,6 +541,7 @@ dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
     { name = "temporalio" },
+    { name = "urllib3" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -626,6 +624,7 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.43,<3" },
     { name = "structlog", specifier = ">=25.4,<26" },
     { name = "temporalio", specifier = ">=1.16,<2" },
+    { name = "urllib3", specifier = ">=2.8.0,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
 ]
 provides-extras = ["optimization", "repository", "llm", "local", "worker-batch", "worker-external-provider", "worker-gpu-inference", "worker-gpu-training"]

@@ -20,10 +20,6 @@ env:
 
 jobs:
   exact-sha-ci:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.run_attempt == 1
     name: Require successful broad CI for this exact SHA
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -34,8 +30,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          SOURCE_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           set -euo pipefail
+          # Execute a failing gate: skipped workflows must never qualify a release.
+          test "${SOURCE_CONCLUSION}" = success
+          test "${SOURCE_EVENT}" = push
+          test "${SOURCE_ATTEMPT}" = 1
           workflow_runs="$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100")"

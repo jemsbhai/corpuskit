@@ -327,8 +327,12 @@ def test_ci_runs_only_for_updates_and_quality_uses_the_completed_push_sha() -> N
     assert quality.get("on", quality.get(True)) == {
         "workflow_run": {"workflows": ["CI"], "branches": ["main"], "types": ["completed"]}
     }
-    assert "run_attempt == 1" in quality["jobs"]["exact-sha-ci"]["if"]
-    assert "workflow_run.event == 'push'" in quality["jobs"]["exact-sha-ci"]["if"]
+    gate = quality["jobs"]["exact-sha-ci"]
+    assert "if" not in gate
+    script = gate["steps"][0]["run"]
+    assert 'test "${SOURCE_CONCLUSION}" = success' in script
+    assert 'test "${SOURCE_EVENT}" = push' in script
+    assert 'test "${SOURCE_ATTEMPT}" = 1' in script
     for job in quality["jobs"].values():
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/checkout@"):

@@ -859,3 +859,13 @@ def test_web_image_copies_local_npm_archives_before_install() -> None:
             archive = dependency.removeprefix("file:")
             assert (REPOSITORY_ROOT / archive).is_file()
             assert text.index(f"COPY {archive} ./{archive}") < text.index("    npm ci")
+
+
+def test_published_dependencies_enforce_the_urllib3_security_floor() -> None:
+    project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    lock = tomllib.loads(UV_LOCK.read_text(encoding="utf-8"))
+    assert "urllib3>=2.8.0,<3" in project["project"]["dependencies"]
+    application = next(package for package in lock["package"] if package["name"] == "corpuskit-app")
+    assert {"name": "urllib3", "specifier": ">=2.8.0,<3"} in application["metadata"][
+        "requires-dist"
+    ]
