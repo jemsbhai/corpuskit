@@ -3,22 +3,24 @@
 ARG NODE_VERSION=24.18.1
 ARG NODE_IMAGE_DIGEST=sha256:c2cc26d8f991c2db236ad51a61efee843c482372d6d22570787309d511694110
 ARG NPM_VERSION=11.16.0
-ARG OPENSSL_PACKAGE_VERSION=3.5.8-r0
+ARG OPENSSL_MIN_VERSION=3.5.9-r0
 
 FROM node:${NODE_VERSION}-alpine3.23@${NODE_IMAGE_DIGEST} AS dependencies
 
 ARG NPM_VERSION
-ARG OPENSSL_PACKAGE_VERSION
+ARG OPENSSL_MIN_VERSION
 WORKDIR /app
 
+# Alpine rotates patch packages; retain a security floor while accepting newer fixes.
 RUN apk add --no-cache --upgrade \
-        "libcrypto3=${OPENSSL_PACKAGE_VERSION}" \
-        "libssl3=${OPENSSL_PACKAGE_VERSION}" \
+        "libcrypto3>=${OPENSSL_MIN_VERSION}" \
+        "libssl3>=${OPENSSL_MIN_VERSION}" \
     && npm install --global "npm@${NPM_VERSION}" --ignore-scripts \
     && test "$(npm --version)" = "${NPM_VERSION}"
 
 COPY package.json package-lock.json .npmrc ./
 COPY apps/web/package.json ./apps/web/package.json
+COPY vendor/braces/corpuskit-braces-3.0.3-corpuskit.1.tgz ./vendor/braces/corpuskit-braces-3.0.3-corpuskit.1.tgz
 RUN --mount=type=cache,target=/root/.npm \
     npm ci \
     && test "$(npm approve-scripts --allow-scripts-pending)" = \
@@ -36,7 +38,7 @@ RUN npm run build --workspace @corpuskit/web
 
 FROM node:${NODE_VERSION}-alpine3.23@${NODE_IMAGE_DIGEST} AS runtime
 
-ARG OPENSSL_PACKAGE_VERSION
+ARG OPENSSL_MIN_VERSION
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -48,8 +50,8 @@ WORKDIR /app
 # npm is pinned and verified in the dependency/build stages. The standalone
 # server needs only Node, so do not ship the build/package-manager toolchain.
 RUN apk add --no-cache --upgrade \
-        "libcrypto3=${OPENSSL_PACKAGE_VERSION}" \
-        "libssl3=${OPENSSL_PACKAGE_VERSION}" \
+        "libcrypto3>=${OPENSSL_MIN_VERSION}" \
+        "libssl3>=${OPENSSL_MIN_VERSION}" \
     && rm -rf /usr/local/lib/node_modules/npm \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx
 

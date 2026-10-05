@@ -615,7 +615,7 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
             "sha256:c2cc26d8f991c2db236ad51a61efee843c482372d6d22570787309d511694110"
         ),
         "NPM_VERSION": "11.16.0",
-        "OPENSSL_PACKAGE_VERSION": "3.5.8-r0",
+        "OPENSSL_MIN_VERSION": "3.5.9-r0",
     }.items():
         assert f"ARG {argument}={value}" in text
 
@@ -630,8 +630,8 @@ def test_web_image_uses_the_pinned_alpine_build_only_npm_contract() -> None:
     assert 'npm install --global "npm@${NPM_VERSION}" --ignore-scripts' in dependencies
     assert 'test "$(npm --version)" = "${NPM_VERSION}"' in dependencies
     assert text.count("apk add --no-cache --upgrade") == 2
-    assert text.count('"libcrypto3=${OPENSSL_PACKAGE_VERSION}"') == 2
-    assert text.count('"libssl3=${OPENSSL_PACKAGE_VERSION}"') == 2
+    assert text.count('"libcrypto3>=${OPENSSL_MIN_VERSION}"') == 2
+    assert text.count('"libssl3>=${OPENSSL_MIN_VERSION}"') == 2
     assert "npm install" not in runtime
     assert "rm -rf /usr/local/lib/node_modules/npm" in runtime
     assert "rm -f /usr/local/bin/npm /usr/local/bin/npx" in runtime
@@ -849,3 +849,13 @@ def test_checksum_manifest_rejects_unchecked_or_tampered_assets(tmp_path: Path) 
     result = run_contract(*verify_arguments)
     assert result.returncode == 2
     assert "checksum" in result.stderr
+
+
+def test_web_image_copies_local_npm_archives_before_install() -> None:
+    text = (REPOSITORY_ROOT / "docker/web.Dockerfile").read_text(encoding="utf-8")
+    package = json.loads((REPOSITORY_ROOT / "package.json").read_text(encoding="utf-8"))
+    for dependency in package["devDependencies"].values():
+        if dependency.startswith("file:"):
+            archive = dependency.removeprefix("file:")
+            assert (REPOSITORY_ROOT / archive).is_file()
+            assert text.index(f"COPY {archive} ./{archive}") < text.index("    npm ci")
