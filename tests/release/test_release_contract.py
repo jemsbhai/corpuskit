@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -313,15 +314,182 @@ def test_tag_release_builds_every_exact_image_once() -> None:
     assert release.count("--network none") >= 2
 
 
-def test_release_requires_exact_sha_ci_and_scheduled_quality() -> None:
+def test_release_requires_exact_sha_ci_and_completed_source_sha_quality() -> None:
     release = RELEASE_WORKFLOWS[0].read_text(encoding="utf-8")
-    assert 'for required_workflow in "ci.yml" "quality-scheduled.yml"; do' in release
     assert (
-        "actions/workflows/${required_workflow}/runs?head_sha=${SOURCE_SHA}"
-        "&status=success&per_page=100"
+        "actions/workflows/ci.yml/runs?head_sha=${SOURCE_SHA}&status=success&per_page=100"
     ) in release
     assert "select(.head_sha == $sha)" in release
+    assert 'select(.event == "push")' in release
     assert 'select(.conclusion == "success")' in release
+    assert (
+        "actions/workflows/quality-scheduled.yml/runs?event=workflow_run"
+        "&status=success&per_page=100"
+    ) in release
+    assert "actions/workflows/quality-scheduled.yml/runs?head_sha=" not in release
+    assert "actions/runs/${quality_run_id}/jobs?filter=latest&per_page=100" in release
+    assert "actions/runs/${quality_run_id}/artifacts?per_page=100" in release
+    assert 'test "${quality_qualified}" = true' in release
+
+
+def _release_quality_step() -> str:
+    workflow = yaml.safe_load(RELEASE_WORKFLOWS[0].read_text(encoding="utf-8"))
+    step = next(
+        step
+        for step in workflow["jobs"]["preflight"]["steps"]
+        if step.get("name") == "Require a verified tag and successful exact-SHA quality workflows"
+    )
+    return step["run"]
+
+
+def _release_quality_filter(response: str) -> str:
+    arguments = r' --arg sha "\$\{SOURCE_SHA\}"' if response == "artifacts" else ""
+    expression = re.search(
+        rf"if jq -e{arguments} '\n(.*?)\n\s*' "
+        rf'<<<"\$\{{quality_{response}\}}"',
+        _release_quality_step(),
+        re.DOTALL,
+    )
+    assert expression is not None, "Release must expose its actual quality evidence filter"
+    return expression.group(1)
+
+
+def _run_release_quality_filter(expression: str, response: object) -> object:
+    jq = shutil.which("jq")
+    if jq is None:
+        pytest.skip("jq is required to execute the release workflow's actual evidence filter")
+    result = subprocess.run(  # noqa: S603 - fixed executable and repository-owned filter.
+        [jq, "-e", "--arg", "sha", "a" * 40, expression],
+        input=json.dumps(response),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode in (0, 1), result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize(
+    ("event", "conclusion", "attempt", "sha", "expected"),
+    [
+        pytest.param("push", "success", 1, "a", True, id="initial-exact-sha-push"),
+        pytest.param("push", "success", 2, "a", False, id="unchanged-ci-rerun"),
+        pytest.param("push", "failure", 1, "a", False, id="failed-ci"),
+        pytest.param("push", "success", 1, "b", False, id="other-source-sha"),
+        pytest.param("pull_request", "success", 1, "a", False, id="pr-tests-synthetic-merge"),
+        pytest.param("workflow_dispatch", "success", 1, "a", False, id="manual-ci"),
+    ],
+)
+def test_release_only_qualifies_initial_successful_exact_sha_push_ci(
+    event: str, conclusion: str, attempt: int, sha: str, expected: bool
+) -> None:
+    expression = re.search(
+        r'jq -e --arg sha "\$\{SOURCE_SHA\}" '
+        r"'\n(.*?)\n\s*' "
+        r'<<<"\$\{workflow_runs\}"',
+        _release_quality_step(),
+        re.DOTALL,
+    )
+    assert expression is not None
+    response = {
+        "workflow_runs": [
+            {
+                "event": event,
+                "conclusion": conclusion,
+                "run_attempt": attempt,
+                "head_sha": sha * 40,
+            }
+        ]
+    }
+    assert _run_release_quality_filter(expression.group(1), response) is expected
+
+
+@pytest.mark.parametrize(
+    ("event", "conclusion", "attempt", "expected"),
+    [
+        pytest.param("workflow_run", "success", 1, [123], id="initial-quality-run"),
+        pytest.param("workflow_run", "success", 2, [], id="unchanged-quality-rerun"),
+        pytest.param("workflow_run", "failure", 1, [], id="failed-quality"),
+        pytest.param("workflow_dispatch", "success", 1, [], id="manual-quality"),
+    ],
+)
+def test_release_only_qualifies_initial_successful_automatic_quality_runs(
+    event: str, conclusion: str, attempt: int, expected: list[int]
+) -> None:
+    expression = re.search(
+        r"quality_candidates=.*?jq -r '\n(.*?)\n\s*' <<<", _release_quality_step(), re.DOTALL
+    )
+    assert expression is not None
+    pages = [
+        {
+            "workflow_runs": [
+                {"id": 123, "event": event, "conclusion": conclusion, "run_attempt": attempt}
+            ]
+        }
+    ]
+    assert _run_release_quality_filter(f"[{expression.group(1)}]", pages) == expected
+
+
+@pytest.mark.parametrize(
+    ("job_index", "change", "expected"),
+    [pytest.param(None, None, True, id="every-quality-job-completed")]
+    + [
+        pytest.param(index, change, False, id=f"job-{index}-{change}")
+        for index in range(5)
+        for change in ("missing", "skipped", "failure", "cancelled", "in_progress", "duplicate")
+    ],
+)
+def test_release_rejects_missing_skipped_or_unsuccessful_quality_jobs(
+    job_index: int | None, change: str | None, expected: bool
+) -> None:
+    workflow = yaml.safe_load(QUALITY_WORKFLOW.read_text(encoding="utf-8"))
+    jobs = [
+        {"name": job["name"], "status": "completed", "conclusion": "success"}
+        for job in workflow["jobs"].values()
+    ]
+    assert len(jobs) == 5
+    if job_index is not None:
+        if change == "missing":
+            jobs.pop(job_index)
+        elif change == "duplicate":
+            jobs.append(dict(jobs[job_index]))
+        elif change == "in_progress":
+            jobs[job_index].update(status="in_progress", conclusion=None)
+        else:
+            jobs[job_index]["conclusion"] = change
+    pages = [{"jobs": jobs[:2]}, {"jobs": jobs[2:]}]
+    assert _run_release_quality_filter(_release_quality_filter("jobs"), pages) is expected
+
+
+@pytest.mark.parametrize(
+    ("artifact_index", "change", "expected"),
+    [pytest.param(None, None, True, id="all-source-sha-evidence-retained")]
+    + [
+        pytest.param(index, change, False, id=f"artifact-{index}-{change}")
+        for index in range(4)
+        for change in ("missing", "expired", "wrong_sha")
+    ],
+)
+def test_release_rejects_missing_expired_or_wrong_source_sha_quality_artifacts(
+    artifact_index: int | None, change: str | None, expected: bool
+) -> None:
+    prefixes = (
+        "nightly-backend-",
+        "nightly-frontend-",
+        "performance-evidence-",
+        "mutation-evidence-",
+    )
+    artifacts = [{"name": prefix + "a" * 40, "expired": False} for prefix in prefixes]
+    if artifact_index is not None:
+        if change == "missing":
+            artifacts.pop(artifact_index)
+        elif change == "expired":
+            artifacts[artifact_index]["expired"] = True
+        else:
+            artifacts[artifact_index]["name"] = prefixes[artifact_index] + "b" * 40
+    pages = [{"artifacts": artifacts[:2]}, {"artifacts": artifacts[2:]}]
+    assert _run_release_quality_filter(_release_quality_filter("artifacts"), pages) is expected
 
 
 def test_required_ci_installs_optional_contracts_and_runs_real_datg_acceptance() -> None:
