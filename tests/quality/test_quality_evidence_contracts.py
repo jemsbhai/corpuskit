@@ -318,8 +318,11 @@ def test_ci_runs_only_for_updates_and_quality_uses_the_completed_push_sha() -> N
         assert "schedule" not in trigger, path.name
     ci = yaml.safe_load((workflows / "ci.yml").read_text(encoding="utf-8"))
     assert set(ci.get("on", ci.get(True))) == {"push", "pull_request"}
+    assert ci.get("on", ci.get(True))["pull_request"]["types"] == ["opened", "synchronize"]
     deployment = yaml.safe_load((workflows / "deployment.yml").read_text(encoding="utf-8"))
-    assert set(deployment.get("on", deployment.get(True))) == {"push", "pull_request"}
+    deployment_trigger = deployment.get("on", deployment.get(True))
+    assert set(deployment_trigger) == {"push", "pull_request"}
+    assert deployment_trigger["pull_request"]["types"] == ["opened", "synchronize"]
     quality = yaml.safe_load((workflows / "quality-scheduled.yml").read_text(encoding="utf-8"))
     assert quality.get("on", quality.get(True)) == {
         "workflow_run": {"workflows": ["CI"], "branches": ["main"], "types": ["completed"]}
