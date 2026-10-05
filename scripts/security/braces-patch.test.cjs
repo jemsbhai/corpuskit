@@ -8,6 +8,7 @@ const braces = require("braces");
 const root = path.resolve(__dirname, "../..");
 const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
 const lock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
+const provenance = JSON.parse(readFileSync(path.join(root, "vendor/braces/provenance.json"), "utf8"));
 const patched = lock.packages["node_modules/braces"];
 
 test("every locked braces copy uses the reviewed security patch", () => {
@@ -15,9 +16,17 @@ test("every locked braces copy uses the reviewed security patch", () => {
   assert.match(archive, /^file:vendor\/braces\/[^/]+\.tgz$/);
   assert.equal(manifest.overrides.braces, "$braces");
   assert.equal(patched.name, "@corpuskit/braces");
+  // A prerelease is excluded by consumer ranges such as ^3.0.3, allowing
+  // dependency updaters that miss the override to install an upstream copy.
+  assert.match(patched.version, /^\d+\.\d+\.\d+\+corpuskit\.\d+$/);
+  const upstreamVersion = new URL(provenance.upstream).pathname.match(/braces-(\d+\.\d+\.\d+)\.tgz$/);
+  assert.ok(upstreamVersion);
+  assert.equal(patched.version.split("+")[0], upstreamVersion[1]);
   assert.equal(patched.resolved, archive);
+  const tarball = readFileSync(path.join(root, archive.slice("file:".length)));
+  assert.equal(createHash("sha256").update(tarball).digest("hex"), provenance.patched_sha256);
   const integrity = "sha512-" + createHash("sha512")
-    .update(readFileSync(path.join(root, archive.slice("file:".length))))
+    .update(tarball)
     .digest("base64");
   assert.equal(patched.integrity, integrity);
 
