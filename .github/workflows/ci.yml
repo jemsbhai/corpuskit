@@ -843,7 +843,8 @@ jobs:
           package-manager-cache: false
 
       - name: Pin npm toolchain
-        run: | # zizmor: ignore[adhoc-packages] Exact npm bootstrap precedes locked npm ci.
+        run:
+          | # zizmor: ignore[adhoc-packages] Exact npm bootstrap precedes locked npm ci.
           npm install --global npm@11.16.0 --ignore-scripts
           test "$(npm --version)" = "11.16.0"
 
@@ -974,7 +975,8 @@ jobs:
           push: false
           tags: corpuskit-api:ci
           cache-from: type=gha,scope=corpuskit-api
-          cache-to: type=gha,mode=max,scope=corpuskit-api
+          # PRs reuse the shared cache; only main pushes publish it on a best-effort basis.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=corpuskit-api,ignore-error=true,timeout=2m' || '' }}
 
       - name: Build batch worker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -986,7 +988,7 @@ jobs:
           push: false
           tags: corpuskit-worker-batch:ci
           cache-from: type=gha,scope=corpuskit-worker-batch
-          cache-to: type=gha,mode=max,scope=corpuskit-worker-batch
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=corpuskit-worker-batch,ignore-error=true,timeout=2m' || '' }}
 
       - name: Build external-provider worker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -998,7 +1000,7 @@ jobs:
           push: false
           tags: corpuskit-worker-external-provider:ci
           cache-from: type=gha,scope=corpuskit-worker-external-provider
-          cache-to: type=gha,mode=max,scope=corpuskit-worker-external-provider
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=corpuskit-worker-external-provider,ignore-error=true,timeout=2m' || '' }}
 
       - name: Smoke-test exact worker images as read-only non-root
         run: |
@@ -1164,7 +1166,7 @@ jobs:
           push: false
           tags: corpuskit-web:ci
           cache-from: type=gha,scope=corpuskit-web
-          cache-to: type=gha,mode=max,scope=corpuskit-web
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,scope=corpuskit-web,ignore-error=true,timeout=2m' || '' }}
 
       - name: Smoke-test web image as read-only non-root
         if: ${{ hashFiles('package-lock.json') != '' && hashFiles('apps/web/package.json') != '' }}
