@@ -264,9 +264,9 @@ def test_ci_service_and_direct_run_images_are_digest_pinned() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert re.search(r"image: postgres:17\.9-bookworm@sha256:[0-9a-f]{64}$", workflow, re.MULTILINE)
     assert len(re.findall(r"temporalio/temporal:1\.8\.2@sha256:[0-9a-f]{64}", workflow)) == 1
-    assert "docker build --file docker/minio-ci.Dockerfile" in workflow
+    assert "docker build --file docker/minio.Dockerfile --target minio-server" in workflow
     assert "corpuskit-minio:ci" in workflow
-    minio = (REPOSITORY_ROOT / "docker/minio-ci.Dockerfile").read_text(encoding="utf-8")
+    minio = (REPOSITORY_ROOT / "docker/minio.Dockerfile").read_text(encoding="utf-8")
     assert "git fetch --depth 1 origin 07c3a429bfed433e49018cb0f78a52145d4bedeb" in minio
     assert "USER 10001:10001" in minio
 

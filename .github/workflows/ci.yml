@@ -444,7 +444,7 @@ jobs:
           .
 
       - name: Build MinIO from immutable upstream source
-        run: docker build --file docker/minio-ci.Dockerfile --tag corpuskit-minio:ci .
+        run: docker build --file docker/minio.Dockerfile --target minio-server --tag corpuskit-minio:ci .
 
       - name: Start pinned local Temporal and private MinIO servers
         run: |
@@ -1022,6 +1022,11 @@ jobs:
             --entrypoint python \
             corpuskit-worker-external-provider:ci \
             -c "import importlib.util; import corpusgen, datasets, litellm; import corpuskit.worker.composition; assert importlib.util.find_spec('torch') is None"
+
+      - name: Build pinned Compose object-storage services
+        env:
+          COMPOSE_PROJECT_NAME: corpuskit-ci
+        run: docker compose build minio minio-init
 
       - name: Smoke-test clean Compose migration and API startup
         env:
