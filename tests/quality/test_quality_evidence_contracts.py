@@ -308,3 +308,23 @@ def test_junit_contract_rejects_empty_or_malformed_evidence(tmp_path: Path) -> N
     malformed.write_text("<not-junit/>", encoding="utf-8")
     with pytest.raises(JunitContractError, match="root"):
         evaluate_junit(malformed)
+
+
+def test_ci_runs_only_for_updates_and_quality_uses_the_completed_push_sha() -> None:
+    workflows = REPOSITORY_ROOT / ".github/workflows"
+    for path in workflows.glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        trigger = workflow.get("on", workflow.get(True, {}))
+        assert "schedule" not in trigger, path.name
+    ci = yaml.safe_load((workflows / "ci.yml").read_text(encoding="utf-8"))
+    assert set(ci.get("on", ci.get(True))) == {"push", "pull_request"}
+    quality = yaml.safe_load((workflows / "quality-scheduled.yml").read_text(encoding="utf-8"))
+    assert quality.get("on", quality.get(True)) == {
+        "workflow_run": {"workflows": ["CI"], "branches": ["main"], "types": ["completed"]}
+    }
+    assert "run_attempt == 1" in quality["jobs"]["exact-sha-ci"]["if"]
+    assert "workflow_run.event == 'push'" in quality["jobs"]["exact-sha-ci"]["if"]
+    for job in quality["jobs"].values():
+        for step in job["steps"]:
+            if step.get("uses", "").startswith("actions/checkout@"):
+                assert step["with"]["ref"] == "${{ github.event.workflow_run.head_sha }}"

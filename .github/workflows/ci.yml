@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -443,6 +442,9 @@ jobs:
           --tag corpuskit-worker-batch:combined-ci
           .
 
+      - name: Build MinIO from immutable upstream source
+        run: docker build --file docker/minio-ci.Dockerfile --tag corpuskit-minio:ci .
+
       - name: Start pinned local Temporal and private MinIO servers
         run: |
           docker run --detach --rm --name corpuskit-temporal-ci \
@@ -453,10 +455,10 @@ jobs:
             --publish 127.0.0.1:9000:9000 \
             --env MINIO_ROOT_USER=corpuskit-combined \
             --env MINIO_ROOT_PASSWORD=combined-minio-only \
-            --tmpfs /data:rw,noexec,nodev,nosuid,size=256m \
+            --tmpfs /data:rw,noexec,nodev,nosuid,size=256m,mode=1777 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            corpuskit-minio:ci \
             server /data --address :9000
           for _attempt in $(seq 1 30); do
             if docker exec corpuskit-temporal-ci temporal operator cluster health \

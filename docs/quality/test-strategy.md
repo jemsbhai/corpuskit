@@ -182,7 +182,7 @@ reruns may collect diagnostic evidence only; the original failure keeps the chec
 
 ### Automated nightly profile
 
-The daily/manual `quality-scheduled.yml` workflow first requires a successful broad
+The push-triggered `quality-scheduled.yml` workflow first requires a successful broad
 `ci.yml` run for the exact same SHA, then repeats or extends it with:
 
 - real production-image eSpeak and checksum-verified PHOIBLE across multilingual
