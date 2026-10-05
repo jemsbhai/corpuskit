@@ -870,11 +870,14 @@ jobs:
       - name: Enforce changed workbench coverage
         run: npm run test:workbenches -- --coverage.reportsDirectory=coverage/workbenches
 
-      - name: Install Chromium for browser acceptance
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium and Firefox for browser acceptance
+        run: npx playwright install --with-deps chromium firefox
 
       - name: Browser and accessibility acceptance
         run: npm run test:e2e -- --project=chromium
+
+      - name: Firefox workbench navigation and accessibility regression
+        run: npm run test:e2e -- --project=firefox e2e/workbenches.spec.ts
 
       - name: Preserve frontend coverage and browser evidence
         if: ${{ always() }}
