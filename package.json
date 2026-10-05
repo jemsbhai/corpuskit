@@ -31,7 +31,7 @@
     "@vitest/coverage-v8": "^4.1.11",
     "jsdom": "^26.1.0",
     "vitest": "^4.1.11",
-    "braces": "file:vendor/braces/corpuskit-braces-3.0.3-corpuskit.1.tgz"
+    "braces": "file:vendor/braces/corpuskit-braces-3.0.3+corpuskit.1.tgz"
   },
   "overrides": {
     "braces": "$braces"

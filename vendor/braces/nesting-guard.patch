@@ -5,7 +5,7 @@
 +  "name": "@corpuskit/braces",
 @@ -4 +4 @@
 -  "version": "3.0.3",
-+  "version": "3.0.3-corpuskit.1",
++  "version": "3.0.3+corpuskit.1",
 --- a/lib/compile.js
 +++ b/lib/compile.js
 @@ -0,0 +1 @@
