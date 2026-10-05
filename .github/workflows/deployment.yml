@@ -29,7 +29,6 @@ on:
       - tests/deployment/**
       - pyproject.toml
       - uv.lock
-  workflow_dispatch:
 
 permissions:
   contents: read
