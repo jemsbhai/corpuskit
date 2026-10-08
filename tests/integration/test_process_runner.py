@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -553,6 +554,48 @@ def test_child_entrypoint_sanitizes_malformed_envelopes_and_pipe_failures(
         cast(Any, failed_connection),
     )
     assert failed_connection.closed is True
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_child_progress_rejection_emits_one_sanitized_terminal_envelope(duplicate: bool) -> None:
+    connection = RecordingChildConnection()
+
+    _child_execute(
+        HandlerRegistry((InvalidProgressHandler(duplicate=duplicate),)),
+        _request_bytes(RunKind.EXPORT, {"artifact_ref": "opaque-id"}),
+        cast(Any, connection),
+    )
+
+    assert connection.closed is True
+    assert len(connection.messages) == 2
+    progress = json.loads(connection.messages[0])
+    assert progress["status"] == "progress"
+    assert progress["progress"]["sequence"] == 0
+    assert connection.messages[1] == (
+        b'{"code":"invalid_progress","retryable":false,"status":"error"}'
+    )
+    assert b"super-secret-progress-canary" not in b"".join(connection.messages)
+
+
+def test_child_progress_pipe_failure_emits_retryable_safe_error() -> None:
+    class FailingProgressConnection(RecordingChildConnection):
+        def send_bytes(self, value: bytes) -> None:
+            if json.loads(value)["status"] == "progress":
+                raise BrokenPipeError("private progress-pipe detail")
+            super().send_bytes(value)
+
+    connection = FailingProgressConnection()
+
+    _child_execute(
+        HandlerRegistry((ProgressThenResultHandler(delay_seconds=0),)),
+        _request_bytes(RunKind.EXPORT, {"artifact_ref": "opaque-id"}),
+        cast(Any, connection),
+    )
+
+    assert connection.closed is True
+    assert connection.messages == [
+        b'{"code":"worker_process_failed","retryable":true,"status":"error"}'
+    ]
 
 
 @pytest.mark.parametrize(
