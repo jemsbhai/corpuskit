@@ -123,7 +123,7 @@ jobs:
           password: ${{ github.token }}
 
       - name: Set up pinned Docker Buildx inspection tooling
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           version: ${{ env.BUILDX_VERSION }}
           cache-binary: false
@@ -299,7 +299,7 @@ jobs:
           jq -e '.candidate_images | length == 6' promotion-plan.json >/dev/null
 
       - name: Preserve the approved promotion plan
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: promotion-${{ inputs.environment }}-${{ inputs.tag }}-${{ github.run_id }}
           path: promotion-plan.json
